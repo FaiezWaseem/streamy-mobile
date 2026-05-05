@@ -71,13 +71,18 @@ function AuthenticatedStack({ onLogout }: { onLogout: () => void }) {
         )}
       </AuthenticatedNav.Screen>
       <AuthenticatedNav.Screen name="Saved" options={{ headerShown: true, title: 'Saved' }}>
-        {() => <SavedScreen />}
+        {({ navigation }) => (
+          <SavedScreen onOpenVideo={(videoId) => navigation.navigate('Video', { videoId })} />
+        )}
       </AuthenticatedNav.Screen>
       <AuthenticatedNav.Screen name="Video" options={{ headerShown: true, title: 'Video' }}>
         {({ route, navigation }) => (
           <VideoScreen
             videoId={route.params.videoId}
             onOpenVideo={(videoId) => navigation.replace('Video', { videoId })}
+            onOpenChannel={(channelId, title) =>
+              navigation.navigate('ChannelVideos', { channelId, title })
+            }
           />
         )}
       </AuthenticatedNav.Screen>
@@ -153,14 +158,22 @@ function MainTabs({
       <Tab.Screen name="Channels" options={{ headerShown: false }}>
         {() => <ChannelsScreen onOpenChannel={onOpenChannel} />}
       </Tab.Screen>
-      <Tab.Screen name="Upload" options={{ headerShown: false }}>
-        {() => <UploadScreen />}
-      </Tab.Screen>
+      <Tab.Screen
+        name="Upload"
+        component={UploadScreen}
+        options={{ headerShown: false }}
+      />
       <Tab.Screen name="Reels" options={{ headerShown: false }}>
         {() => <ReelsScreen onOpenSaved={onOpenSaved} />}
       </Tab.Screen>
       <Tab.Screen name="Profile" options={{ headerShown: false }}>
-        {() => <ProfileScreen onOpenSaved={onOpenSaved} onLogout={onLogout} />}
+        {() => (
+          <ProfileScreen
+            onOpenSaved={onOpenSaved}
+            onOpenVideo={onOpenVideo}
+            onLogout={onLogout}
+          />
+        )}
       </Tab.Screen>
     </Tab.Navigator>
   );

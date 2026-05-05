@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMemo, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import { appStyles, colors } from '../utils/theme';
@@ -11,7 +11,8 @@ type Props = {
 
 export function ChannelsScreen({ onOpenChannel }: Props) {
   const [query, setQuery] = useState('');
-  const { channels, refreshLibrary, isLoading } = useLocalLibrary();
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { channels, refreshLibrary, isLoading, deleteChannel } = useLocalLibrary();
 
   const filteredChannels = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -24,6 +25,24 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
       channel.title.toLowerCase().includes(search)
     );
   }, [channels, query]);
+
+  function handleDeleteChannel(channelId: string, title: string) {
+    Alert.alert(
+      'Remove channel',
+      `Remove "${title}" from Streamy?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await deleteChannel(channelId);
+            setStatusMessage(result.message);
+          },
+        },
+      ]
+    );
+  }
 
   return (
     <SafeAreaView style={appStyles.screen}>
@@ -44,22 +63,35 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
             {isLoading ? 'Scanning videos...' : 'Refresh Local Videos'}
           </Text>
         </Pressable>
+        {statusMessage ? (
+          <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
+            <Text style={appStyles.formStatusText}>{statusMessage}</Text>
+          </View>
+        ) : null}
 
         {filteredChannels.map((channel) => (
-          <Pressable
-            key={channel.id}
-            style={appStyles.channelListCard}
-            onPress={() => onOpenChannel(channel.id, channel.title)}
-          >
-            <View style={appStyles.channelListIcon}>
-              <Ionicons name="folder-open-outline" size={24} color={colors.white} />
-            </View>
-            <View style={appStyles.channelListBody}>
-              <Text style={appStyles.channelListTitle}>{channel.title}</Text>
-              <Text style={appStyles.channelListMeta}>{channel.videos} videos</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-          </Pressable>
+          <View key={channel.id} style={appStyles.channelListCard}>
+            <Pressable
+              style={appStyles.channelListPressable}
+              onPress={() => onOpenChannel(channel.id, channel.title)}
+            >
+              <View style={appStyles.channelListIcon}>
+                <Ionicons name="folder-open-outline" size={24} color={colors.white} />
+              </View>
+              <View style={appStyles.channelListBody}>
+                <Text style={appStyles.channelListTitle}>{channel.title}</Text>
+                <Text style={appStyles.channelListMeta}>{channel.videos} videos</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </Pressable>
+            <Pressable
+              style={appStyles.channelDeleteButton}
+              onPress={() => handleDeleteChannel(channel.id, channel.title)}
+            >
+              <Ionicons name="trash-outline" size={18} color={colors.white} />
+              <Text style={appStyles.channelDeleteButtonText}>Remove</Text>
+            </Pressable>
+          </View>
         ))}
 
         {!filteredChannels.length ? (

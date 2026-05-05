@@ -82,6 +82,7 @@ export const appStyles = StyleSheet.create({
   },
   inputGroup: {
     gap: 8,
+    width: '100%',
   },
   inputLabel: {
     color: colors.text,
@@ -116,6 +117,10 @@ export const appStyles = StyleSheet.create({
     backgroundColor: '#10281a',
     borderColor: '#1f7a43',
   },
+  formStatusInfo: {
+    backgroundColor: '#122031',
+    borderColor: '#315a88',
+  },
   formStatusError: {
     backgroundColor: '#341317',
     borderColor: colors.accent,
@@ -130,6 +135,7 @@ export const appStyles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 16,
     alignItems: 'center',
+    width: '100%',
   },
   primaryButtonPressed: {
     transform: [{ scale: 0.98 }],
@@ -155,6 +161,7 @@ export const appStyles = StyleSheet.create({
     borderColor: colors.border,
     alignItems: 'center',
     backgroundColor: colors.surfaceSoft,
+    width: '100%',
   },
   secondaryButtonText: {
     color: colors.text,
@@ -280,6 +287,9 @@ export const appStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 16,
+    gap: 14,
+  },
+  channelListPressable: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
@@ -304,6 +314,23 @@ export const appStyles = StyleSheet.create({
   channelListMeta: {
     color: colors.textMuted,
     fontSize: 13,
+  },
+  channelDeleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+    backgroundColor: colors.accentSoft,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    paddingVertical: 12,
+  },
+  channelDeleteButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '800',
   },
   emptyState: {
     backgroundColor: colors.surface,
@@ -337,6 +364,9 @@ export const appStyles = StyleSheet.create({
     height: '100%',
   },
   reelVideo: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  reelTapSurface: {
     ...StyleSheet.absoluteFillObject,
   },
   reelOverlay: {
@@ -402,13 +432,41 @@ export const appStyles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  reelPlaybackBadge: {
+    position: 'absolute',
+    top: 62,
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  reelPlaybackBadgeText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  reelSpeedBadge: {
+    position: 'absolute',
+    top: 110,
+    right: 16,
+    backgroundColor: colors.accent,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  reelSpeedBadgeText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '800',
+  },
   uploadPanel: {
     backgroundColor: colors.surface,
     borderRadius: 28,
     borderWidth: 1,
     borderColor: colors.border,
     padding: 24,
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
     gap: 14,
   },
   uploadTitle: {
@@ -421,6 +479,38 @@ export const appStyles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 15,
     lineHeight: 24,
+  },
+  uploadPreviewCard: {
+    width: '100%',
+    gap: 10,
+  },
+  uploadPreviewImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceMuted,
+  },
+  uploadPreviewPlaceholder: {
+    width: '100%',
+    height: 220,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadPreviewLabel: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  uploadPreviewMeta: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  textArea: {
+    minHeight: 120,
+    paddingTop: 14,
   },
   profileHeader: {
     alignItems: 'center',
@@ -521,6 +611,10 @@ export const appStyles = StyleSheet.create({
     fontWeight: '700',
   },
   searchResultsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     gap: 14,
   },
   searchResultsList: {
@@ -544,16 +638,39 @@ export const appStyles = StyleSheet.create({
     borderColor: colors.border,
     marginBottom: 14,
   },
+  videoCardHome: {
+    backgroundColor: colors.background,
+    marginBottom: 20,
+  },
   videoCardGridImageWrap: {
     position: 'relative',
+  },
+  videoCardHomeImageWrap: {
+    position: 'relative',
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   videoCardGridImage: {
     width: '100%',
     height: 170,
   },
+  videoCardHomeImage: {
+    width: '100%',
+    height: 220,
+  },
   videoCardPlaceholderGrid: {
     width: '100%',
     height: 170,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoCardPlaceholderHome: {
+    width: '100%',
+    height: 220,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -602,6 +719,40 @@ export const appStyles = StyleSheet.create({
     gap: 6,
     justifyContent: 'center',
   },
+  videoCardHomeBody: {
+    paddingTop: 12,
+  },
+  videoCardHomeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  videoCardHomeAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.accentSoft,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoCardHomeAvatarText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  videoCardHomeTitleWrap: {
+    flex: 1,
+    gap: 4,
+    paddingRight: 8,
+  },
+  videoCardHomeTitle: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
+  },
   videoCardTitle: {
     color: colors.text,
     fontSize: 15,
@@ -646,6 +797,10 @@ export const appStyles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  videoActionButtonActive: {
+    backgroundColor: colors.accent,
+    borderColor: '#ff5a67',
   },
   videoActionText: {
     color: colors.text,

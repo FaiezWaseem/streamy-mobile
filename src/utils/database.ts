@@ -28,6 +28,22 @@ export type ImportedVideoRow = {
   published: string;
 };
 
+export type StoredVideoRow = {
+  video_id: string;
+  title: string;
+  creator: string;
+  thumbnail: string | null;
+  video_uri: string;
+  duration: string;
+  views: string;
+  description: string;
+  subscribers: string;
+  published: string;
+  channel_id: string | null;
+  channel_title: string | null;
+  tracked_at: string;
+};
+
 export type ScannedDirectoryRow = {
   directory_uri: string;
   title: string;
@@ -37,41 +53,75 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const currentVersion = result?.user_version ?? 0;
 
-  if (currentVersion >= 3) {
-    return;
+  if (currentVersion < 3) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS recent_videos (
+        video_id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        thumbnail TEXT NOT NULL,
+        views TEXT NOT NULL,
+        duration TEXT NOT NULL,
+        viewed_at TEXT NOT NULL,
+        view_count INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE IF NOT EXISTS imported_videos (
+        video_id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_title TEXT NOT NULL,
+        video_uri TEXT NOT NULL,
+        thumbnail TEXT,
+        duration TEXT NOT NULL,
+        views TEXT NOT NULL,
+        description TEXT NOT NULL,
+        subscribers TEXT NOT NULL,
+        published TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS scanned_directories (
+        directory_uri TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL
+      );
+    `);
   }
 
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS recent_videos (
-      video_id TEXT PRIMARY KEY NOT NULL,
-      title TEXT NOT NULL,
-      creator TEXT NOT NULL,
-      thumbnail TEXT NOT NULL,
-      views TEXT NOT NULL,
-      duration TEXT NOT NULL,
-      viewed_at TEXT NOT NULL,
-      view_count INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS imported_videos (
-      video_id TEXT PRIMARY KEY NOT NULL,
-      title TEXT NOT NULL,
-      creator TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      channel_title TEXT NOT NULL,
-      video_uri TEXT NOT NULL,
-      thumbnail TEXT,
-      duration TEXT NOT NULL,
-      views TEXT NOT NULL,
-      description TEXT NOT NULL,
-      subscribers TEXT NOT NULL,
-      published TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS scanned_directories (
-      directory_uri TEXT PRIMARY KEY NOT NULL,
-      title TEXT NOT NULL
-    );
-    PRAGMA user_version = 3;
-  `);
+  if (currentVersion < 4) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS liked_videos (
+        video_id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        thumbnail TEXT,
+        video_uri TEXT NOT NULL,
+        duration TEXT NOT NULL,
+        views TEXT NOT NULL,
+        description TEXT NOT NULL,
+        subscribers TEXT NOT NULL,
+        published TEXT NOT NULL,
+        channel_id TEXT,
+        channel_title TEXT,
+        tracked_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS saved_videos (
+        video_id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        thumbnail TEXT,
+        video_uri TEXT NOT NULL,
+        duration TEXT NOT NULL,
+        views TEXT NOT NULL,
+        description TEXT NOT NULL,
+        subscribers TEXT NOT NULL,
+        published TEXT NOT NULL,
+        channel_id TEXT,
+        channel_title TEXT,
+        tracked_at TEXT NOT NULL
+      );
+    `);
+  }
+
+  await db.execAsync(`PRAGMA user_version = 4;`);
 }
 
 export async function recordVideoView(db: SQLiteDatabase, video: VideoItem) {
@@ -140,6 +190,27 @@ export async function getImportedVideos(db: SQLiteDatabase) {
   );
 }
 
+export async function deleteImportedVideo(db: SQLiteDatabase, videoId: string) {
+  await db.runAsync(`DELETE FROM imported_videos WHERE video_id = ?`, [videoId]);
+  await deleteVideoReferences(db, videoId);
+}
+
+export async function deleteImportedVideosByChannel(
+  db: SQLiteDatabase,
+  channelId: string
+) {
+  const rows = await db.getAllAsync<{ video_id: string }>(
+    `SELECT video_id FROM imported_videos WHERE channel_id = ?`,
+    [channelId]
+  );
+
+  await db.runAsync(`DELETE FROM imported_videos WHERE channel_id = ?`, [channelId]);
+
+  for (const row of rows) {
+    await deleteVideoReferences(db, row.video_id);
+  }
+}
+
 export async function saveScannedDirectory(
   db: SQLiteDatabase,
   directory: ScannedDirectoryRow
@@ -154,4 +225,153 @@ export async function getScannedDirectories(db: SQLiteDatabase) {
   return db.getAllAsync<ScannedDirectoryRow>(
     `SELECT * FROM scanned_directories ORDER BY rowid DESC`
   );
+}
+
+export async function deleteScannedDirectory(db: SQLiteDatabase, directoryUri: string) {
+  const rows = await db.getAllAsync<{ video_id: string }>(
+    `SELECT video_id FROM recent_videos WHERE video_id LIKE ?`,
+    [`${directoryUri}:%`]
+  );
+
+  await db.runAsync(`DELETE FROM scanned_directories WHERE directory_uri = ?`, [directoryUri]);
+
+  for (const row of rows) {
+    await deleteVideoReferences(db, row.video_id);
+  }
+}
+
+async function ensureTrackedTables(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS liked_videos (
+      video_id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      creator TEXT NOT NULL,
+      thumbnail TEXT,
+      video_uri TEXT NOT NULL,
+      duration TEXT NOT NULL,
+      views TEXT NOT NULL,
+      description TEXT NOT NULL,
+      subscribers TEXT NOT NULL,
+      published TEXT NOT NULL,
+      channel_id TEXT,
+      channel_title TEXT,
+      tracked_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS saved_videos (
+      video_id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      creator TEXT NOT NULL,
+      thumbnail TEXT,
+      video_uri TEXT NOT NULL,
+      duration TEXT NOT NULL,
+      views TEXT NOT NULL,
+      description TEXT NOT NULL,
+      subscribers TEXT NOT NULL,
+      published TEXT NOT NULL,
+      channel_id TEXT,
+      channel_title TEXT,
+      tracked_at TEXT NOT NULL
+    );
+  `);
+}
+
+async function deleteVideoReferences(db: SQLiteDatabase, videoId: string) {
+  await ensureTrackedTables(db);
+  await db.runAsync(`DELETE FROM recent_videos WHERE video_id = ?`, [videoId]);
+  await db.runAsync(`DELETE FROM liked_videos WHERE video_id = ?`, [videoId]);
+  await db.runAsync(`DELETE FROM saved_videos WHERE video_id = ?`, [videoId]);
+}
+
+async function upsertTrackedVideo(
+  db: SQLiteDatabase,
+  table: 'liked_videos' | 'saved_videos',
+  video: VideoItem
+) {
+  await ensureTrackedTables(db);
+  await db.runAsync(
+    `INSERT OR REPLACE INTO ${table} (
+      video_id, title, creator, thumbnail, video_uri, duration, views,
+      description, subscribers, published, channel_id, channel_title, tracked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      video.id,
+      video.title,
+      video.creator,
+      video.image ?? null,
+      video.video,
+      video.duration,
+      video.views,
+      video.description,
+      video.subscribers,
+      video.published,
+      video.channelId ?? null,
+      video.channelTitle ?? null,
+      new Date().toISOString(),
+    ]
+  );
+}
+
+async function removeTrackedVideo(
+  db: SQLiteDatabase,
+  table: 'liked_videos' | 'saved_videos',
+  videoId: string
+) {
+  await ensureTrackedTables(db);
+  await db.runAsync(`DELETE FROM ${table} WHERE video_id = ?`, [videoId]);
+}
+
+async function hasTrackedVideo(
+  db: SQLiteDatabase,
+  table: 'liked_videos' | 'saved_videos',
+  videoId: string
+) {
+  await ensureTrackedTables(db);
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) as count FROM ${table} WHERE video_id = ?`,
+    [videoId]
+  );
+
+  return (row?.count ?? 0) > 0;
+}
+
+async function getTrackedVideos(
+  db: SQLiteDatabase,
+  table: 'liked_videos' | 'saved_videos'
+) {
+  await ensureTrackedTables(db);
+  return db.getAllAsync<StoredVideoRow>(
+    `SELECT * FROM ${table} ORDER BY datetime(tracked_at) DESC`
+  );
+}
+
+export async function likeVideo(db: SQLiteDatabase, video: VideoItem) {
+  return upsertTrackedVideo(db, 'liked_videos', video);
+}
+
+export async function unlikeVideo(db: SQLiteDatabase, videoId: string) {
+  return removeTrackedVideo(db, 'liked_videos', videoId);
+}
+
+export async function isVideoLiked(db: SQLiteDatabase, videoId: string) {
+  return hasTrackedVideo(db, 'liked_videos', videoId);
+}
+
+export async function getLikedVideos(db: SQLiteDatabase) {
+  return getTrackedVideos(db, 'liked_videos');
+}
+
+export async function saveVideo(db: SQLiteDatabase, video: VideoItem) {
+  return upsertTrackedVideo(db, 'saved_videos', video);
+}
+
+export async function unsaveVideo(db: SQLiteDatabase, videoId: string) {
+  return removeTrackedVideo(db, 'saved_videos', videoId);
+}
+
+export async function isVideoSaved(db: SQLiteDatabase, videoId: string) {
+  return hasTrackedVideo(db, 'saved_videos', videoId);
+}
+
+export async function getSavedVideos(db: SQLiteDatabase) {
+  return getTrackedVideos(db, 'saved_videos');
 }

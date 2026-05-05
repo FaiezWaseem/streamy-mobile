@@ -5,20 +5,31 @@ import { type VideoItem } from '../utils/types';
 
 type Props = {
   video: VideoItem;
-  layout: 'grid' | 'list';
+  layout: 'grid' | 'list' | 'home';
   onPress: (videoId: string) => void;
 };
 
 export function VideoCard({ video, layout, onPress }: Props) {
+  const isGrid = layout === 'grid';
+  const isHome = layout === 'home';
+
   return (
     <Pressable
       onPress={() => onPress(video.id)}
-      style={layout === 'grid' ? appStyles.videoCardGrid : appStyles.videoCardList}
+      style={
+        isGrid
+          ? appStyles.videoCardGrid
+          : isHome
+            ? appStyles.videoCardHome
+            : appStyles.videoCardList
+      }
     >
       <View
         style={
-          layout === 'grid'
+          isGrid
             ? appStyles.videoCardGridImageWrap
+            : isHome
+              ? appStyles.videoCardHomeImageWrap
             : appStyles.videoCardListImageWrap
         }
       >
@@ -26,16 +37,20 @@ export function VideoCard({ video, layout, onPress }: Props) {
           <Image
             source={{ uri: video.image }}
             style={
-              layout === 'grid'
+              isGrid
                 ? appStyles.videoCardGridImage
+                : isHome
+                  ? appStyles.videoCardHomeImage
                 : appStyles.videoCardListImage
             }
           />
         ) : (
           <View
             style={
-              layout === 'grid'
+              isGrid
                 ? appStyles.videoCardPlaceholderGrid
+                : isHome
+                  ? appStyles.videoCardPlaceholderHome
                 : appStyles.videoCardPlaceholderList
             }
           >
@@ -48,14 +63,39 @@ export function VideoCard({ video, layout, onPress }: Props) {
       </View>
       <View
         style={
-          layout === 'grid'
+          isGrid
             ? appStyles.videoCardGridBody
+            : isHome
+              ? appStyles.videoCardHomeBody
             : appStyles.videoCardListBody
         }
       >
-        <Text style={appStyles.videoCardTitle}>{video.title}</Text>
-        <Text style={appStyles.videoCardMeta}>{video.creator}</Text>
-        <Text style={appStyles.videoCardMeta}>{video.views}</Text>
+        {isHome ? (
+          <>
+            <View style={appStyles.videoCardHomeHeader}>
+              <View style={appStyles.videoCardHomeAvatar}>
+                <Text style={appStyles.videoCardHomeAvatarText}>
+                  {(video.channelTitle ?? video.creator).slice(0, 1).toUpperCase()}
+                </Text>
+              </View>
+              <View style={appStyles.videoCardHomeTitleWrap}>
+                <Text style={appStyles.videoCardHomeTitle}>{video.title}</Text>
+                <Text style={appStyles.videoCardMeta}>
+                  {video.channelTitle ?? video.creator}
+                </Text>
+                <Text style={appStyles.videoCardMeta}>
+                  {video.views} · {video.published}
+                </Text>
+              </View>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={appStyles.videoCardTitle}>{video.title}</Text>
+            <Text style={appStyles.videoCardMeta}>{video.creator}</Text>
+            <Text style={appStyles.videoCardMeta}>{video.views}</Text>
+          </>
+        )}
       </View>
     </Pressable>
   );

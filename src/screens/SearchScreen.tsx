@@ -78,7 +78,7 @@ export function SearchScreen({ onOpenVideo }: Props) {
               <VideoCard
                 key={video.id}
                 video={video}
-                layout={layout}
+                layout={layout === 'list' ? 'home' : 'grid'}
                 onPress={onOpenVideo}
               />
             ))}

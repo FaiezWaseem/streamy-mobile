@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   FlatList,
+  Image,
   Pressable,
   SafeAreaView,
   Text,
@@ -79,34 +80,126 @@ type ReelItemProps = {
 function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
   const player = useVideoPlayer(item.video, (videoPlayer) => {
     videoPlayer.loop = true;
+    videoPlayer.playbackRate = 1;
   });
+  const [isPortraitReel, setIsPortraitReel] = useState(true);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isSpeedBoosted, setIsSpeedBoosted] = useState(false);
+  const longPressTriggeredRef = useRef(false);
 
   useEffect(() => {
     if (isActive) {
-      player.play();
+      if (isPaused) {
+        player.pause();
+      } else {
+        player.play();
+      }
     } else {
       player.pause();
+      player.playbackRate = 1;
+      setIsPaused(false);
+      setIsSpeedBoosted(false);
+      longPressTriggeredRef.current = false;
     }
-  }, [isActive, player]);
+  }, [isActive, isPaused, player]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!item.image) {
+      setIsPortraitReel(true);
+      return;
+    }
+
+    Image.getSize(
+      item.image,
+      (width, height) => {
+        if (!isMounted) {
+          return;
+        }
+
+        const aspectRatio = width / height;
+        setIsPortraitReel(aspectRatio <= 0.7);
+      },
+      () => {
+        if (isMounted) {
+          setIsPortraitReel(true);
+        }
+      }
+    );
+
+    return () => {
+      isMounted = false;
+    };
+  }, [item.image]);
 
   const reelHeight = Dimensions.get('window').height;
 
+  function handleTogglePlayback() {
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+
+    setIsPaused((current) => {
+      const nextPaused = !current;
+
+      if (nextPaused) {
+        player.pause();
+      } else {
+        player.play();
+      }
+
+      return nextPaused;
+    });
+  }
+
+  function handleSpeedBoostStart() {
+    longPressTriggeredRef.current = true;
+    player.playbackRate = 2;
+    player.play();
+    setIsPaused(false);
+    setIsSpeedBoosted(true);
+  }
+
+  function handleSpeedBoostEnd() {
+    player.playbackRate = 1;
+    setIsSpeedBoosted(false);
+  }
+
   return (
-    <View style={[appStyles.reelSlide, { height: reelHeight }]}>
-      <VideoView
-        player={player}
-        style={appStyles.reelVideo}
-        contentFit="cover"
-        nativeControls={false}
-        allowsFullscreen={false}
-      />
-      <View style={appStyles.reelOverlay} />
+    <Pressable
+      style={[appStyles.reelSlide, { height: reelHeight }]}
+      onPress={handleTogglePlayback}
+      onLongPress={handleSpeedBoostStart}
+      onPressOut={handleSpeedBoostEnd}
+      delayLongPress={220}
+    >
+      <View style={appStyles.reelTapSurface}>
+        <VideoView
+          player={player}
+          style={appStyles.reelVideo}
+          contentFit={isPortraitReel ? 'cover' : 'contain'}
+          nativeControls={false}
+          allowsFullscreen={false}
+        />
+      </View>
+      <View pointerEvents="none" style={appStyles.reelOverlay} />
       <View style={appStyles.reelDurationBadge}>
         <Text style={appStyles.reelDurationText}>{item.duration}</Text>
       </View>
+      {isPaused ? (
+        <View style={appStyles.reelPlaybackBadge}>
+          <Text style={appStyles.reelPlaybackBadgeText}>Paused</Text>
+        </View>
+      ) : null}
+      {isSpeedBoosted ? (
+        <View style={appStyles.reelSpeedBadge}>
+          <Text style={appStyles.reelSpeedBadgeText}>2x</Text>
+        </View>
+      ) : null}
       <View style={appStyles.reelActions}>
         <ActionBubble icon="heart-outline" label="Like" />
-        <ActionBubble icon="chatbubble-ellipses-outline" label="Comment" />
         <Pressable onPress={onOpenSaved}>
           <ActionBubble icon="bookmark-outline" label="Save" />
         </Pressable>
@@ -118,6 +211,6 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
           {item.views} · {item.published}
         </Text>
       </View>
-    </View>
+    </Pressable>
   );
 }

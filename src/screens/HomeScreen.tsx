@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
+  const [layout, setLayout] = useState<'grid' | 'list'>('list');
   const { videos, pickDirectory, isLoading, permissionGranted } = useLocalLibrary();
 
   return (
@@ -34,24 +36,44 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
           </Pressable>
         </View>
 
-        <View style={appStyles.heroCard}>
-          <Text style={appStyles.heroTitle}>Featured workspace</Text>
-          <Text style={appStyles.heroSubtitle}>
-            {permissionGranted === false
-              ? 'Allow media access to load your device videos and group them into channels.'
-              : 'Pick a folder such as Downloads, and Streamy will store that directory URI plus its video file paths in SQLite.'}
-          </Text>
-        </View>
-
         {videos.length ? (
           <>
             <Text style={appStyles.sectionTitle}>Latest videos</Text>
-            <View style={appStyles.searchResultsList}>
+            <Text style={appStyles.sectionMeta}>
+              Browse your local feed in grid or full-width list layout.
+            </Text>
+            <View style={appStyles.toggleRow}>
+              <Pressable
+                style={[
+                  appStyles.toggleButton,
+                  layout === 'grid' && appStyles.toggleButtonActive,
+                ]}
+                onPress={() => setLayout('grid')}
+              >
+                <Ionicons name="grid-outline" size={18} color={colors.white} />
+                <Text style={appStyles.toggleButtonText}>Grid</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  appStyles.toggleButton,
+                  layout === 'list' && appStyles.toggleButtonActive,
+                ]}
+                onPress={() => setLayout('list')}
+              >
+                <Ionicons name="list-outline" size={18} color={colors.white} />
+                <Text style={appStyles.toggleButtonText}>List</Text>
+              </Pressable>
+            </View>
+            <View
+              style={
+                layout === 'grid' ? appStyles.searchResultsGrid : appStyles.searchResultsList
+              }
+            >
               {videos.slice(0, 6).map((video) => (
                 <VideoCard
                   key={video.id}
                   video={video}
-                  layout="list"
+                  layout={layout === 'list' ? 'home' : 'grid'}
                   onPress={onOpenVideo}
                 />
               ))}

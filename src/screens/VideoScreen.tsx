@@ -1,23 +1,42 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Image, Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
-import { getRecentVideos, recordVideoView, type RecentVideoRow } from '../utils/database';
+import {
+  getRecentVideos,
+  isVideoLiked,
+  isVideoSaved,
+  likeVideo,
+  recordVideoView,
+  saveVideo,
+  type RecentVideoRow,
+  unlikeVideo,
+  unsaveVideo,
+} from '../utils/database';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
   videoId: string;
   onOpenVideo: (videoId: string) => void;
+  onOpenChannel: (channelId: string, title: string) => void;
 };
 
-export function VideoScreen({ videoId, onOpenVideo }: Props) {
+function fallbackChannelId(value: string) {
+  return `channel-${value.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
   const db = useSQLiteContext();
-  const { videos, getVideoById } = useLocalLibrary();
+  const { videos, getVideoById, deleteVideo } = useLocalLibrary();
   const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
+  const [liked, setLiked] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const video = useMemo(() => getVideoById(videoId) ?? videos[0], [getVideoById, videoId, videos]);
 
   if (!video) {
@@ -59,6 +78,120 @@ export function VideoScreen({ videoId, onOpenVideo }: Props) {
     syncHistory();
   }, [db, video]);
 
+  useFocusEffect(
+    useCallback(() => {
+      async function syncTrackedState() {
+        setLiked(await isVideoLiked(db, video.id));
+        setSaved(await isVideoSaved(db, video.id));
+        setActionMessage(null);
+      }
+
+      syncTrackedState();
+    }, [db, video.id])
+  );
+
+  async function handleToggleLike() {
+    console.log('[video] like button tapped', { videoId: video.id, title: video.title });
+    const nextLiked = !liked;
+    setLiked(nextLiked);
+
+    try {
+      if (nextLiked) {
+        await likeVideo(db, video);
+        const confirmed = await isVideoLiked(db, video.id);
+        setLiked(confirmed);
+        setActionMessage(confirmed ? 'Added to liked videos.' : 'Could not like this video.');
+        console.log('[video] liked video', {
+          videoId: video.id,
+          title: video.title,
+          confirmed,
+        });
+        return;
+      }
+
+      await unlikeVideo(db, video.id);
+      const confirmed = await isVideoLiked(db, video.id);
+      setLiked(confirmed);
+      setActionMessage(!confirmed ? 'Removed from liked videos.' : 'Could not remove like.');
+      console.log('[video] unliked video', {
+        videoId: video.id,
+        title: video.title,
+        confirmed,
+      });
+    } catch (error) {
+      console.log('[video] failed to toggle like', {
+        videoId: video.id,
+        title: video.title,
+        error,
+      });
+      setLiked(!nextLiked);
+      setActionMessage('Failed to update liked videos.');
+    }
+  }
+
+  async function handleToggleSave() {
+    console.log('[video] save button tapped', { videoId: video.id, title: video.title });
+    const nextSaved = !saved;
+    setSaved(nextSaved);
+
+    try {
+      if (nextSaved) {
+        await saveVideo(db, video);
+        const confirmed = await isVideoSaved(db, video.id);
+        setSaved(confirmed);
+        setActionMessage(confirmed ? 'Saved to your library.' : 'Could not save this video.');
+        console.log('[video] saved video', {
+          videoId: video.id,
+          title: video.title,
+          confirmed,
+        });
+        return;
+      }
+
+      await unsaveVideo(db, video.id);
+      const confirmed = await isVideoSaved(db, video.id);
+      setSaved(confirmed);
+      setActionMessage(!confirmed ? 'Removed from your saved videos.' : 'Could not remove save.');
+      console.log('[video] unsaved video', {
+        videoId: video.id,
+        title: video.title,
+        confirmed,
+      });
+    } catch (error) {
+      console.log('[video] failed to toggle save', {
+        videoId: video.id,
+        title: video.title,
+        error,
+      });
+      setSaved(!nextSaved);
+      setActionMessage('Failed to update saved videos.');
+    }
+  }
+
+  function handleOpenChannel() {
+    const title = video.channelTitle ?? video.creator;
+    const channelId = video.channelId ?? fallbackChannelId(title);
+    onOpenChannel(channelId, title);
+  }
+
+  function handleDeleteVideo() {
+    Alert.alert(
+      'Remove video',
+      `Remove "${video.title}" from Streamy?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await deleteVideo(video.id);
+            setActionMessage(result.message);
+          },
+        },
+      ]
+    );
+  }
+
   return (
     <SafeAreaView style={appStyles.screen}>
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -77,25 +210,50 @@ export function VideoScreen({ videoId, onOpenVideo }: Props) {
           </Text>
 
           <View style={appStyles.videoActionRow}>
-            <Pressable style={appStyles.videoActionButton}>
-              <Ionicons name="thumbs-up-outline" size={18} color={colors.white} />
-              <Text style={appStyles.videoActionText}>Like</Text>
-            </Pressable>
-            <Pressable style={appStyles.videoActionButton}>
-              <Ionicons name="share-social-outline" size={18} color={colors.white} />
-              <Text style={appStyles.videoActionText}>Share</Text>
+            <Pressable
+              style={[
+                appStyles.videoActionButton,
+                liked && appStyles.videoActionButtonActive,
+              ]}
+              onPress={handleToggleLike}
+            >
+              <Ionicons
+                name={liked ? 'thumbs-up' : 'thumbs-up-outline'}
+                size={18}
+                color={colors.white}
+              />
+              <Text style={appStyles.videoActionText}>{liked ? 'Liked' : 'Like'}</Text>
             </Pressable>
             <Pressable style={appStyles.videoActionButton}>
               <Ionicons name="download-outline" size={18} color={colors.white} />
               <Text style={appStyles.videoActionText}>Download</Text>
             </Pressable>
-            <Pressable style={appStyles.videoActionButton}>
-              <Ionicons name="bookmark-outline" size={18} color={colors.white} />
-              <Text style={appStyles.videoActionText}>Save</Text>
+            <Pressable
+              style={[
+                appStyles.videoActionButton,
+                saved && appStyles.videoActionButtonActive,
+              ]}
+              onPress={handleToggleSave}
+            >
+              <Ionicons
+                name={saved ? 'bookmark' : 'bookmark-outline'}
+                size={18}
+                color={colors.white}
+              />
+              <Text style={appStyles.videoActionText}>{saved ? 'Saved' : 'Save'}</Text>
+            </Pressable>
+            <Pressable style={appStyles.videoActionButton} onPress={handleDeleteVideo}>
+              <Ionicons name="trash-outline" size={18} color={colors.white} />
+              <Text style={appStyles.videoActionText}>Remove</Text>
             </Pressable>
           </View>
+          {actionMessage ? (
+            <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
+              <Text style={appStyles.formStatusText}>{actionMessage}</Text>
+            </View>
+          ) : null}
 
-          <View style={appStyles.videoChannelCard}>
+          <Pressable style={appStyles.videoChannelCard} onPress={handleOpenChannel}>
             {video.image ? (
               <Image source={{ uri: video.image }} style={appStyles.videoChannelAvatar} />
             ) : (
@@ -114,7 +272,7 @@ export function VideoScreen({ videoId, onOpenVideo }: Props) {
             <Pressable style={appStyles.videoSubscribeButton}>
               <Text style={appStyles.videoSubscribeText}>Subscribe</Text>
             </Pressable>
-          </View>
+          </Pressable>
 
           <View style={appStyles.videoDescriptionCard}>
             <Text style={appStyles.videoDescriptionHeading}>Description</Text>
@@ -149,7 +307,7 @@ export function VideoScreen({ videoId, onOpenVideo }: Props) {
                       channelTitle: getVideoById(item.video_id)?.channelTitle,
                       source: getVideoById(item.video_id)?.source ?? video.source,
                     }}
-                    layout="list"
+                    layout="home"
                     onPress={onOpenVideo}
                   />
                 ))}
@@ -163,7 +321,7 @@ export function VideoScreen({ videoId, onOpenVideo }: Props) {
               <VideoCard
                 key={item.id}
                 video={item}
-                layout="list"
+                layout="home"
                 onPress={onOpenVideo}
               />
             ))}

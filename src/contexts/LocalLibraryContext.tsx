@@ -1,6 +1,4 @@
-import * as DocumentPicker from 'expo-document-picker';
 import { Directory, Paths } from 'expo-file-system';
-import * as MediaLibrary from 'expo-media-library';
 import { useSQLiteContext } from 'expo-sqlite';
 import {
   createContext,
@@ -13,13 +11,19 @@ import {
 } from 'react';
 
 import {
+  deleteImportedVideo,
+  deleteImportedVideosByChannel,
+  deleteScannedDirectory,
   getScannedDirectories,
   getImportedVideos,
-  saveImportedVideo,
   saveScannedDirectory,
   type ImportedVideoRow,
   type ScannedDirectoryRow,
 } from '../utils/database';
+import {
+  extractDurationFromUri,
+  generateThumbnail,
+} from '../utils/media';
 import { type ChannelItem, type VideoItem } from '../utils/types';
 
 type LocalLibraryContextValue = {
@@ -29,7 +33,8 @@ type LocalLibraryContextValue = {
   isLoading: boolean;
   refreshLibrary: () => Promise<void>;
   pickDirectory: () => Promise<void>;
-  importVideo: () => Promise<void>;
+  deleteVideo: (videoId: string) => Promise<{ removed: boolean; message: string }>;
+  deleteChannel: (channelId: string) => Promise<{ removed: boolean; message: string }>;
   getChannelVideos: (channelId: string) => VideoItem[];
   getVideoById: (videoId: string) => VideoItem | undefined;
 };
@@ -42,16 +47,6 @@ function slugifyChannelId(value: string) {
 
 function directoryChannelId(directoryUri: string) {
   return `directory-${encodeURIComponent(directoryUri)}`;
-}
-
-function formatDuration(seconds: number | undefined) {
-  if (!seconds || seconds <= 0) {
-    return '0:00';
-  }
-
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function isVideoFileName(name: string) {
@@ -87,14 +82,14 @@ function mapVideosToChannels(videos: VideoItem[]): ChannelItem[] {
 
 export function LocalLibraryProvider({ children }: { children: ReactNode }) {
   const db = useSQLiteContext();
-  const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+  const [permissionGranted] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [libraryVideos, setLibraryVideos] = useState<VideoItem[]>([]);
   const [importedVideos, setImportedVideos] = useState<VideoItem[]>([]);
   const [directoryVideos, setDirectoryVideos] = useState<VideoItem[]>([]);
 
   const loadImported = useCallback(async () => {
     const rows = await getImportedVideos(db);
+    console.log('[library] loading imported videos from sqlite', { count: rows.length });
     setImportedVideos(
       rows.map((row: ImportedVideoRow) => ({
         id: row.video_id,
@@ -116,17 +111,33 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
 
   const loadScannedDirectories = useCallback(async () => {
     const rows = await getScannedDirectories(db);
+    console.log('[library] loading scanned directories', { count: rows.length, rows });
     const nextVideos: VideoItem[] = [];
 
     for (const row of rows as ScannedDirectoryRow[]) {
       try {
         const directory = new Directory(row.directory_uri);
         const entries = directory.list();
+        console.log('[library] scanning directory', {
+          title: row.title,
+          directoryUri: row.directory_uri,
+          entryCount: entries.length,
+        });
 
         for (const entry of entries) {
           if (!isVideoFileName(entry.name)) {
             continue;
           }
+
+          const thumbnailUri = await generateThumbnail(entry.uri);
+          const duration = await extractDurationFromUri(entry.uri);
+          console.log('[library] directory video discovered', {
+            entryName: entry.name,
+            entryUri: entry.uri,
+            channelTitle: row.title,
+            thumbnailUri,
+            duration,
+          });
 
           nextVideos.push({
             id: `${row.directory_uri}:${entry.name}`,
@@ -134,9 +145,9 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
             creator: row.title,
             channelId: directoryChannelId(row.directory_uri),
             channelTitle: row.title,
-            image: undefined,
+            image: thumbnailUri,
             video: entry.uri,
-            duration: '0:00',
+            duration,
             views: 'Directory file',
             description: `Loaded from selected directory "${row.title}".`,
             subscribers: 'Directory source',
@@ -144,11 +155,16 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
             source: 'library',
           });
         }
-      } catch {
+      } catch (error) {
+        console.log('[library] failed to read scanned directory', {
+          directoryUri: row.directory_uri,
+          error,
+        });
         // Ignore directories that are no longer readable in the current session.
       }
     }
 
+    console.log('[library] scanned directory videos ready', { count: nextVideos.length });
     setDirectoryVideos(nextVideos);
   }, [db]);
 
@@ -156,53 +172,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
 
     try {
-      const permission = await MediaLibrary.requestPermissionsAsync();
-      setPermissionGranted(permission.granted);
-
-      if (!permission.granted) {
-        setLibraryVideos([]);
-        await loadImported();
-        await loadScannedDirectories();
-        return;
-      }
-
-      const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
-      const seen = new Set<string>();
-      const nextVideos: VideoItem[] = [];
-
-      for (const album of albums) {
-        const assetsPage = await MediaLibrary.getAssetsAsync({
-          album,
-          mediaType: ['video'],
-          first: 50,
-          sortBy: [['creationTime', false]],
-        });
-
-        for (const asset of assetsPage.assets) {
-          if (seen.has(asset.id)) {
-            continue;
-          }
-
-          seen.add(asset.id);
-          nextVideos.push({
-            id: asset.id,
-            title: asset.filename.replace(/\.[^/.]+$/, '') || 'Local video',
-            creator: album.title,
-            channelId: slugifyChannelId(album.title),
-            channelTitle: album.title,
-            image: undefined,
-            video: asset.uri,
-            duration: formatDuration(asset.duration),
-            views: 'Local file',
-            description: `Loaded from your local media library in "${album.title}".`,
-            subscribers: 'Local library',
-            published: 'On device',
-            source: 'library',
-          });
-        }
-      }
-
-      setLibraryVideos(nextVideos);
+      console.log('[library] refreshing confirmed local sources');
       await loadImported();
       await loadScannedDirectories();
     } finally {
@@ -211,54 +181,76 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
   }, [db, loadImported, loadScannedDirectories]);
 
   const pickDirectory = useCallback(async () => {
+    console.log('[library] opening directory picker');
     const picked = await Directory.pickDirectoryAsync();
+    const title = Paths.basename(picked.uri) || 'Picked directory';
+    console.log('[library] directory picked', { uri: picked.uri, title });
 
     await saveScannedDirectory(db, {
       directory_uri: picked.uri,
-      title: Paths.basename(picked.uri) || 'Picked directory',
+      title,
     });
+    console.log('[library] scanned directory saved in sqlite', { uri: picked.uri, title });
 
     await loadScannedDirectories();
   }, [db, loadScannedDirectories]);
 
-  const importVideo = useCallback(async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'video/*',
-      multiple: false,
-      copyToCacheDirectory: true,
-    });
+  const deleteVideo = useCallback(
+    async (videoId: string) => {
+      const target = importedVideos.find((video) => video.id === videoId);
 
-    if (result.canceled || !result.assets[0]) {
-      return;
-    }
+      if (!target) {
+        return {
+          removed: false,
+          message: 'Only imported videos can be removed individually right now.',
+        };
+      }
 
-    const asset = result.assets[0];
+      await deleteImportedVideo(db, videoId);
+      console.log('[library] imported video deleted', { videoId, title: target.title });
+      await refreshLibrary();
 
-    await saveImportedVideo(db, {
-      video_id: `imported-${Date.now()}`,
-      title: asset.name.replace(/\.[^/.]+$/, '') || 'Imported video',
-      creator: 'Imported',
-      channel_id: 'channel-imported',
-      channel_title: 'Imported',
-      video_uri: asset.uri,
-      thumbnail: null,
-      duration: '0:00',
-      views: 'Imported file',
-      description: 'Imported from the device file picker.',
-      subscribers: 'Private import',
-      published: 'Just now',
-    });
+      return {
+        removed: true,
+        message: 'Imported video removed from Streamy.',
+      };
+    },
+    [db, importedVideos, refreshLibrary]
+  );
 
-    await loadImported();
-  }, [db, loadImported]);
+  const deleteChannel = useCallback(
+    async (channelId: string) => {
+      if (channelId.startsWith('directory-')) {
+        const directoryUri = decodeURIComponent(channelId.replace(/^directory-/, ''));
+        await deleteScannedDirectory(db, directoryUri);
+        console.log('[library] scanned directory removed', { channelId, directoryUri });
+        await refreshLibrary();
+
+        return {
+          removed: true,
+          message: 'Channel removed from Streamy. Source files on your device were not deleted.',
+        };
+      }
+
+      await deleteImportedVideosByChannel(db, channelId);
+      console.log('[library] imported channel removed', { channelId });
+      await refreshLibrary();
+
+      return {
+        removed: true,
+        message: 'Imported channel and its videos were removed from Streamy.',
+      };
+    },
+    [db, refreshLibrary]
+  );
 
   useEffect(() => {
     refreshLibrary();
   }, [refreshLibrary]);
 
   const videos = useMemo(() => {
-    return [...importedVideos, ...directoryVideos, ...libraryVideos];
-  }, [directoryVideos, importedVideos, libraryVideos]);
+    return [...importedVideos, ...directoryVideos];
+  }, [directoryVideos, importedVideos]);
 
   const channels = useMemo(() => mapVideosToChannels(videos), [videos]);
 
@@ -280,7 +272,8 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       isLoading,
       refreshLibrary,
       pickDirectory,
-      importVideo,
+      deleteVideo,
+      deleteChannel,
       getChannelVideos,
       getVideoById,
     }),
@@ -291,7 +284,8 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       isLoading,
       refreshLibrary,
       pickDirectory,
-      importVideo,
+      deleteVideo,
+      deleteChannel,
       getChannelVideos,
       getVideoById,
     ]
