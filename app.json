@@ -16,6 +16,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.faiez.streamy",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#050505"
@@ -29,6 +30,12 @@
     "plugins": [
       "expo-video",
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1c2748e2-585e-45f6-a934-b518e40414e4"
+      }
+    },
+    "owner": "faiez_waseem"
   }
 }
