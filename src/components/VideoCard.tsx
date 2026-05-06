@@ -79,7 +79,13 @@ export function VideoCard({ video, layout, onPress }: Props) {
                 </Text>
               </View>
               <View style={appStyles.videoCardHomeTitleWrap}>
-                <Text style={appStyles.videoCardHomeTitle}>{video.title}</Text>
+                <Text
+                  style={appStyles.videoCardHomeTitle}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
+                >
+                  {video.title}
+                </Text>
                 <Text style={appStyles.videoCardMeta}>
                   {video.channelTitle ?? video.creator}
                 </Text>
@@ -89,9 +95,25 @@ export function VideoCard({ video, layout, onPress }: Props) {
               </View>
             </View>
           </>
+        ) : isGrid ? (
+          <>
+            <Text
+              style={appStyles.videoCardTitle}
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {video.title}
+            </Text>
+          </>
         ) : (
           <>
-            <Text style={appStyles.videoCardTitle}>{video.title}</Text>
+            <Text
+              style={appStyles.videoCardTitle}
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {video.title}
+            </Text>
             <Text style={appStyles.videoCardMeta}>{video.creator}</Text>
             <Text style={appStyles.videoCardMeta}>{video.views}</Text>
           </>
