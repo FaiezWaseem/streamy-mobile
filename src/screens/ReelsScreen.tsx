@@ -1,3 +1,4 @@
+import Slider from '@react-native-community/slider';
 import { useIsFocused } from '@react-navigation/native';
 import { useEvent } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -131,9 +132,13 @@ function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
   const [isPortraitReel, setIsPortraitReel] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [isSpeedBoosted, setIsSpeedBoosted] = useState(false);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [sliderValue, setSliderValue] = useState(0);
   const longPressTriggeredRef = useRef(false);
-  const elapsedTimeLabel = formatPlaybackTime(timeUpdate?.currentTime ?? 0);
-  const totalTimeLabel = formatPlaybackTime(sourceLoad?.duration ?? 0);
+  const currentTime = timeUpdate?.currentTime ?? 0;
+  const duration = sourceLoad?.duration ?? 0;
+  const elapsedTimeLabel = formatPlaybackTime(isSeeking ? sliderValue : currentTime);
+  const totalTimeLabel = formatPlaybackTime(duration);
 
   useEffect(() => {
     if (isActive) {
@@ -157,6 +162,12 @@ function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
       player.playbackRate = 1;
     };
   }, [player]);
+
+  useEffect(() => {
+    if (!isSeeking) {
+      setSliderValue(currentTime);
+    }
+  }, [currentTime, isSeeking]);
 
   useEffect(() => {
     let isMounted = true;
@@ -228,6 +239,25 @@ function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
     setIsSpeedBoosted(false);
   }
 
+  function handleSeekStart() {
+    if (!isActive) {
+      return;
+    }
+
+    setIsSeeking(true);
+  }
+
+  function handleSeekComplete(value: number) {
+    if (!isActive) {
+      setIsSeeking(false);
+      return;
+    }
+
+    player.currentTime = value;
+    setSliderValue(value);
+    setIsSeeking(false);
+  }
+
   return (
     <Pressable
       style={[appStyles.reelSlide, reelHeight ? { height: reelHeight } : null]}
@@ -261,6 +291,21 @@ function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
           <Text style={appStyles.reelSpeedBadgeText}>2x</Text>
         </View>
       ) : null}
+      <View style={appStyles.reelSeekBarWrap}>
+        <Slider
+          minimumValue={0}
+          maximumValue={duration > 0 ? duration : 1}
+          value={Math.min(sliderValue, duration || 1)}
+          minimumTrackTintColor="#ffffff"
+          maximumTrackTintColor="rgba(255,255,255,0.35)"
+          thumbTintColor="#ffffff"
+          onSlidingStart={handleSeekStart}
+          onValueChange={(value) => {
+            setSliderValue(value);
+          }}
+          onSlidingComplete={handleSeekComplete}
+        />
+      </View>
       <View style={appStyles.reelActions}>
         <ActionBubble icon="heart-outline" label="Like" />
         <Pressable onPress={onOpenSaved}>

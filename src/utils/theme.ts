@@ -505,6 +505,13 @@ export const appStyles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  reelSeekBarWrap: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 92,
+    paddingHorizontal: 8,
+  },
   uploadPanel: {
     backgroundColor: colors.surface,
     borderRadius: 28,

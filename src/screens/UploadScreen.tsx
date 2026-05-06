@@ -1,3 +1,4 @@
+import Slider from '@react-native-community/slider';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -15,7 +16,11 @@ import {
 
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import { saveImportedVideo } from '../utils/database';
-import { extractDurationFromUri, generateThumbnail } from '../utils/media';
+import {
+  extractDurationInfoFromUri,
+  formatDuration,
+  generateThumbnail,
+} from '../utils/media';
 import { appStyles, colors } from '../utils/theme';
 
 export function UploadScreen() {
@@ -25,6 +30,10 @@ export function UploadScreen() {
   const [videoLink, setVideoLink] = useState('');
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [duration, setDuration] = useState('0:00');
+  const [durationSeconds, setDurationSeconds] = useState(0);
+  const [thumbnailFrameSeconds, setThumbnailFrameSeconds] = useState(1);
+  const [sliderFrameSeconds, setSliderFrameSeconds] = useState(1);
+  const [isUpdatingThumbnail, setIsUpdatingThumbnail] = useState(false);
   const [title, setTitle] = useState('');
   const [channel, setChannel] = useState('');
   const [description, setDescription] = useState('');
@@ -64,6 +73,48 @@ export function UploadScreen() {
     }
   }
 
+  async function prepareVideoSelection(uri: string, baseName: string, defaultChannel: string) {
+    setVideoUri(uri);
+    setTitle(baseName);
+    if (!channel.trim()) {
+      setChannel(defaultChannel);
+    }
+
+    const durationInfo = await extractDurationInfoFromUri(uri);
+    const nextDurationSeconds = durationInfo.seconds;
+    const safeFrameSeconds = Math.min(1, nextDurationSeconds > 0 ? nextDurationSeconds : 1);
+    const thumb = await generateThumbnail(uri, safeFrameSeconds * 1000);
+
+    setThumbnailUri(thumb ?? null);
+    setDuration(durationInfo.formatted);
+    setDurationSeconds(nextDurationSeconds);
+    setThumbnailFrameSeconds(safeFrameSeconds);
+    setSliderFrameSeconds(safeFrameSeconds);
+    setIsPendingConfirmation(true);
+
+    return {
+      thumbnailUri: thumb,
+      duration: durationInfo.formatted,
+      durationSeconds: nextDurationSeconds,
+    };
+  }
+
+  async function updateThumbnailFrame(nextFrameSeconds: number) {
+    if (!videoUri) {
+      return;
+    }
+
+    setThumbnailFrameSeconds(nextFrameSeconds);
+    setIsUpdatingThumbnail(true);
+
+    try {
+      const thumb = await generateThumbnail(videoUri, Math.max(0, nextFrameSeconds) * 1000);
+      setThumbnailUri(thumb ?? null);
+    } finally {
+      setIsUpdatingThumbnail(false);
+    }
+  }
+
   async function handleChooseVideo() {
     setIsPicking(true);
     setStatusMessage(null);
@@ -84,22 +135,13 @@ export function UploadScreen() {
 
       const asset = result.assets[0];
       console.log('[upload] video selected', { name: asset.name, uri: asset.uri });
-      setVideoUri(asset.uri);
       setVideoLink('');
       const baseName = asset.name.replace(/\.[^/.]+$/, '') || 'Imported video';
-      setTitle(baseName);
-      if (!channel.trim()) {
-        setChannel('Imported');
-      }
-
-      const thumb = await generateThumbnail(asset.uri);
-      const extractedDuration = await extractDurationFromUri(asset.uri);
-      setThumbnailUri(thumb ?? null);
-      setDuration(extractedDuration);
-      setIsPendingConfirmation(true);
+      const prepared = await prepareVideoSelection(asset.uri, baseName, 'Imported');
       console.log('[upload] metadata prepared', {
-        thumbnailUri: thumb,
-        duration: extractedDuration,
+        thumbnailUri: prepared.thumbnailUri,
+        duration: prepared.duration,
+        durationSeconds: prepared.durationSeconds,
       });
     } finally {
       setIsPicking(false);
@@ -136,21 +178,12 @@ export function UploadScreen() {
 
     try {
       console.log('[upload] preparing linked video', { videoLink: trimmedLink });
-      setVideoUri(trimmedLink);
       const baseName = getBaseNameFromLink(trimmedLink);
-      setTitle(baseName);
-      if (!channel.trim()) {
-        setChannel('Linked Videos');
-      }
-
-      const thumb = await generateThumbnail(trimmedLink);
-      const extractedDuration = await extractDurationFromUri(trimmedLink);
-      setThumbnailUri(thumb ?? null);
-      setDuration(extractedDuration);
-      setIsPendingConfirmation(true);
+      const prepared = await prepareVideoSelection(trimmedLink, baseName, 'Linked Videos');
       console.log('[upload] linked video metadata prepared', {
-        thumbnailUri: thumb,
-        duration: extractedDuration,
+        thumbnailUri: prepared.thumbnailUri,
+        duration: prepared.duration,
+        durationSeconds: prepared.durationSeconds,
       });
     } finally {
       setIsPicking(false);
@@ -221,6 +254,9 @@ export function UploadScreen() {
       setVideoLink('');
       setThumbnailUri(null);
       setDuration('0:00');
+      setDurationSeconds(0);
+      setThumbnailFrameSeconds(1);
+      setSliderFrameSeconds(1);
       setTitle('');
       setChannel('');
       setDescription('');
@@ -237,6 +273,9 @@ export function UploadScreen() {
     setVideoLink('');
     setThumbnailUri(null);
     setDuration('0:00');
+    setDurationSeconds(0);
+    setThumbnailFrameSeconds(1);
+    setSliderFrameSeconds(1);
     setTitle('');
     setChannel('');
     setDescription('');
@@ -292,7 +331,11 @@ export function UploadScreen() {
           {videoUri ? (
             <View style={appStyles.uploadPreviewCard}>
               {thumbnailUri ? (
-                <Image source={{ uri: thumbnailUri }} style={appStyles.uploadPreviewImage} />
+                <Image
+                  key={thumbnailUri}
+                  source={{ uri: thumbnailUri }}
+                  style={appStyles.uploadPreviewImage}
+                />
               ) : (
                 <View style={appStyles.uploadPreviewPlaceholder}>
                   <Text style={appStyles.videoCardPlaceholderText}>No thumbnail yet</Text>
@@ -303,6 +346,32 @@ export function UploadScreen() {
               <Text style={appStyles.uploadPreviewMeta}>
                 Source: {videoUri.startsWith('http') ? 'Video link' : 'Local file'}
               </Text>
+              <View style={appStyles.inputGroup}>
+                <Text style={appStyles.inputLabel}>
+                  Thumbnail Frame: {formatDuration(sliderFrameSeconds)}
+                </Text>
+                <Slider
+                  minimumValue={0}
+                  maximumValue={durationSeconds > 0 ? durationSeconds : 1}
+                  step={0.25}
+                  value={Math.min(sliderFrameSeconds, durationSeconds || 1)}
+                  minimumTrackTintColor={colors.accent}
+                  maximumTrackTintColor={colors.border}
+                  thumbTintColor={colors.white}
+                  onValueChange={(value) => {
+                    setSliderFrameSeconds(value);
+                  }}
+                  onSlidingComplete={(value) => {
+                    void updateThumbnailFrame(value);
+                  }}
+                />
+                {isUpdatingThumbnail ? (
+                  <Text style={appStyles.uploadPreviewMeta}>Updating thumbnail frame...</Text>
+                ) : null}
+                <Text style={appStyles.uploadPreviewMeta}>
+                  Applied frame: {formatDuration(thumbnailFrameSeconds)}
+                </Text>
+              </View>
               <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
                 <Text style={appStyles.formStatusText}>
                   Video selected only. It is not saved yet. Review the details below and tap

@@ -11,21 +11,21 @@ export function formatDuration(seconds: number | undefined) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export async function generateThumbnail(uri: string) {
+export async function generateThumbnail(uri: string, time = 1000) {
   try {
-    console.log('[media] generating thumbnail', { uri });
+    console.log('[media] generating thumbnail', { uri, time });
     const result = await VideoThumbnails.getThumbnailAsync(uri, {
-      time: 1000,
+      time,
     });
-    console.log('[media] thumbnail generated', { uri, thumbnailUri: result.uri });
+    console.log('[media] thumbnail generated', { uri, thumbnailUri: result.uri, time });
     return result.uri;
   } catch (error) {
-    console.log('[media] thumbnail generation failed', { uri, error });
+    console.log('[media] thumbnail generation failed', { uri, time, error });
     return undefined;
   }
 }
 
-export async function extractDurationFromUri(uri: string) {
+export async function extractDurationInfoFromUri(uri: string) {
   let sound: Audio.Sound | null = null;
 
   try {
@@ -47,7 +47,10 @@ export async function extractDurationFromUri(uri: string) {
         durationMillis: status.durationMillis,
         formatted,
       });
-      return formatted;
+      return {
+        seconds,
+        formatted,
+      };
     }
   } catch (error) {
     console.log('[media] duration extraction failed', { uri, error });
@@ -61,5 +64,13 @@ export async function extractDurationFromUri(uri: string) {
     }
   }
 
-  return '0:00';
+  return {
+    seconds: 0,
+    formatted: '0:00',
+  };
+}
+
+export async function extractDurationFromUri(uri: string) {
+  const result = await extractDurationInfoFromUri(uri);
+  return result.formatted;
 }
