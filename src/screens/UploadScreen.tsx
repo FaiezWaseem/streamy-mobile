@@ -22,6 +22,7 @@ export function UploadScreen() {
   const db = useSQLiteContext();
   const { refreshLibrary } = useLocalLibrary();
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [videoLink, setVideoLink] = useState('');
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [duration, setDuration] = useState('0:00');
   const [title, setTitle] = useState('');
@@ -33,6 +34,7 @@ export function UploadScreen() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errors, setErrors] = useState<{
     video?: string;
+    videoLink?: string;
     title?: string;
     channel?: string;
     description?: string;
@@ -42,10 +44,30 @@ export function UploadScreen() {
     return `channel-${value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-')}`;
   }
 
+  function isValidVideoLink(value: string) {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function getBaseNameFromLink(value: string) {
+    try {
+      const parsed = new URL(value);
+      const pathPart = parsed.pathname.split('/').filter(Boolean).pop() ?? '';
+
+      return decodeURIComponent(pathPart).replace(/\.[^/.]+$/, '') || 'Linked video';
+    } catch {
+      return 'Linked video';
+    }
+  }
+
   async function handleChooseVideo() {
     setIsPicking(true);
     setStatusMessage(null);
-    setErrors((current) => ({ ...current, video: undefined }));
+    setErrors((current) => ({ ...current, video: undefined, videoLink: undefined }));
 
     try {
       console.log('[upload] opening document picker');
@@ -63,6 +85,7 @@ export function UploadScreen() {
       const asset = result.assets[0];
       console.log('[upload] video selected', { name: asset.name, uri: asset.uri });
       setVideoUri(asset.uri);
+      setVideoLink('');
       const baseName = asset.name.replace(/\.[^/.]+$/, '') || 'Imported video';
       setTitle(baseName);
       if (!channel.trim()) {
@@ -83,9 +106,61 @@ export function UploadScreen() {
     }
   }
 
+  async function handleUseVideoLink() {
+    const trimmedLink = videoLink.trim();
+
+    setStatusMessage(null);
+    setErrors((current) => ({
+      ...current,
+      video: undefined,
+      videoLink: undefined,
+    }));
+
+    if (!trimmedLink) {
+      setErrors((current) => ({
+        ...current,
+        videoLink: 'Paste a video link first',
+      }));
+      return;
+    }
+
+    if (!isValidVideoLink(trimmedLink)) {
+      setErrors((current) => ({
+        ...current,
+        videoLink: 'Enter a valid http or https video link',
+      }));
+      return;
+    }
+
+    setIsPicking(true);
+
+    try {
+      console.log('[upload] preparing linked video', { videoLink: trimmedLink });
+      setVideoUri(trimmedLink);
+      const baseName = getBaseNameFromLink(trimmedLink);
+      setTitle(baseName);
+      if (!channel.trim()) {
+        setChannel('Linked Videos');
+      }
+
+      const thumb = await generateThumbnail(trimmedLink);
+      const extractedDuration = await extractDurationFromUri(trimmedLink);
+      setThumbnailUri(thumb ?? null);
+      setDuration(extractedDuration);
+      setIsPendingConfirmation(true);
+      console.log('[upload] linked video metadata prepared', {
+        thumbnailUri: thumb,
+        duration: extractedDuration,
+      });
+    } finally {
+      setIsPicking(false);
+    }
+  }
+
   function validate() {
     const nextErrors: {
       video?: string;
+      videoLink?: string;
       title?: string;
       channel?: string;
       description?: string;
@@ -143,6 +218,7 @@ export function UploadScreen() {
       console.log('[upload] video saved and library refreshed');
       setStatusMessage('Video saved successfully with thumbnail, title, category, and description.');
       setVideoUri(null);
+      setVideoLink('');
       setThumbnailUri(null);
       setDuration('0:00');
       setTitle('');
@@ -158,6 +234,7 @@ export function UploadScreen() {
   function handleResetSelection() {
     console.log('[upload] clearing pending selection');
     setVideoUri(null);
+    setVideoLink('');
     setThumbnailUri(null);
     setDuration('0:00');
     setTitle('');
@@ -177,11 +254,37 @@ export function UploadScreen() {
           <Text style={appStyles.uploadTitle}>Drop in a reel, clip, or full project export.</Text>
           <Text style={appStyles.uploadSubtitle}>
             Choose a local video, review the thumbnail, then set the channel, title,
-            and description before saving everything into SQLite.
+            and description before saving everything into SQLite. You can also paste
+            a direct video link below.
           </Text>
           <Pressable style={appStyles.primaryButton} onPress={handleChooseVideo} disabled={isPicking}>
             <Text style={appStyles.primaryButtonText}>
               {isPicking ? 'Choosing Video...' : 'Choose Video'}
+            </Text>
+          </Pressable>
+          <View style={appStyles.inputGroup}>
+            <Text style={appStyles.inputLabel}>Video Link</Text>
+            <TextInput
+              value={videoLink}
+              onChangeText={setVideoLink}
+              placeholder="https://example.com/video.mp4"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={[appStyles.input, errors.videoLink ? appStyles.inputError : null]}
+            />
+            {errors.videoLink ? (
+              <Text style={appStyles.inputErrorText}>{errors.videoLink}</Text>
+            ) : null}
+          </View>
+          <Pressable
+            style={appStyles.secondaryButton}
+            onPress={handleUseVideoLink}
+            disabled={isPicking}
+          >
+            <Text style={appStyles.secondaryButtonText}>
+              {isPicking ? 'Preparing Link...' : 'Use Video Link'}
             </Text>
           </Pressable>
           {errors.video ? <Text style={appStyles.inputErrorText}>{errors.video}</Text> : null}
@@ -197,6 +300,9 @@ export function UploadScreen() {
               )}
               <Text style={appStyles.uploadPreviewLabel}>Thumbnail Preview</Text>
               <Text style={appStyles.uploadPreviewMeta}>Duration: {duration}</Text>
+              <Text style={appStyles.uploadPreviewMeta}>
+                Source: {videoUri.startsWith('http') ? 'Video link' : 'Local file'}
+              </Text>
               <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
                 <Text style={appStyles.formStatusText}>
                   Video selected only. It is not saved yet. Review the details below and tap

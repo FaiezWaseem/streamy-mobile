@@ -18,17 +18,29 @@ type Props = {
 
 export function ProfileScreen({ onOpenSaved, onOpenVideo, onLogout }: Props) {
   const db = useSQLiteContext();
-  const { getVideoById } = useLocalLibrary();
+  const { videos, getVideoById } = useLocalLibrary();
   const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
+  const [savedCount, setSavedCount] = useState(0);
+  const [viewsCount, setViewsCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
-      async function loadRecentVideos() {
+      async function loadProfileData() {
         const rows = await getRecentVideos(db, 8);
         setRecentVideos(rows);
+
+        const savedRow = await db.getFirstAsync<{ count: number }>(
+          'SELECT COUNT(*) as count FROM saved_videos'
+        );
+        setSavedCount(savedRow?.count ?? 0);
+
+        const viewsRow = await db.getFirstAsync<{ total: number }>(
+          'SELECT COALESCE(SUM(view_count), 0) as total FROM recent_videos'
+        );
+        setViewsCount(viewsRow?.total ?? 0);
       }
 
-      loadRecentVideos();
+      loadProfileData();
     }, [db])
   );
 
@@ -44,9 +56,9 @@ export function ProfileScreen({ onOpenSaved, onOpenVideo, onLogout }: Props) {
         </View>
 
         <View style={appStyles.statsRow}>
-          <StatCard value="42" label="Uploads" />
-          <StatCard value="128k" label="Views" />
-          <StatCard value="7.8k" label="Saved" />
+          <StatCard value={String(videos.length)} label="Videos" />
+          <StatCard value={String(viewsCount)} label="Views" />
+          <StatCard value={String(savedCount)} label="Saved" />
         </View>
 
         <Pressable style={appStyles.cardRow} onPress={onOpenSaved}>
