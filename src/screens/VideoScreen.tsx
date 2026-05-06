@@ -8,13 +8,11 @@ import { Alert, Image, Pressable, SafeAreaView, ScrollView, Text, View } from 'r
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import {
-  getRecentVideos,
   isVideoLiked,
   isVideoSaved,
   likeVideo,
   recordVideoView,
   saveVideo,
-  type RecentVideoRow,
   unlikeVideo,
   unsaveVideo,
 } from '../utils/database';
@@ -33,7 +31,6 @@ function fallbackChannelId(value: string) {
 export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
   const db = useSQLiteContext();
   const { videos, getVideoById, deleteVideo } = useLocalLibrary();
-  const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -71,8 +68,6 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
   useEffect(() => {
     async function syncHistory() {
       await recordVideoView(db, video);
-      const rows = await getRecentVideos(db, 6);
-      setRecentVideos(rows.filter((row) => row.video_id !== video.id));
     }
 
     syncHistory();
@@ -278,42 +273,6 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
             <Text style={appStyles.videoDescriptionHeading}>Description</Text>
             <Text style={appStyles.videoDescriptionText}>{video.description}</Text>
           </View>
-
-          {recentVideos.length ? (
-            <>
-              <Text style={appStyles.sectionTitle}>Recently watched</Text>
-              <View style={appStyles.searchResultsList}>
-                {recentVideos.map((item) => (
-                  <VideoCard
-                    key={item.video_id}
-                    video={{
-                      id: item.video_id,
-                      title: item.title,
-                      creator: item.creator,
-                      image: item.thumbnail,
-                      duration: item.duration,
-                      views: item.views,
-                      video: getVideoById(item.video_id)?.video ?? video.video,
-                      description:
-                        getVideoById(item.video_id)?.description ??
-                        video.description,
-                      subscribers:
-                        getVideoById(item.video_id)?.subscribers ??
-                        video.subscribers,
-                      published:
-                        getVideoById(item.video_id)?.published ??
-                        video.published,
-                      channelId: getVideoById(item.video_id)?.channelId,
-                      channelTitle: getVideoById(item.video_id)?.channelTitle,
-                      source: getVideoById(item.video_id)?.source ?? video.source,
-                    }}
-                    layout="home"
-                    onPress={onOpenVideo}
-                  />
-                ))}
-              </View>
-            </>
-          ) : null}
 
           <Text style={appStyles.sectionTitle}>Up next</Text>
           <View style={appStyles.searchResultsList}>

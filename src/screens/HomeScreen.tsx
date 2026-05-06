@@ -1,5 +1,7 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useSQLiteContext } from 'expo-sqlite';
+import { useCallback, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
@@ -8,6 +10,7 @@ import {
   type DirectoryImportProgress,
   type DirectorySelection,
 } from '../contexts/LocalLibraryContext';
+import { getRecentVideos, type RecentVideoRow } from '../utils/database';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
@@ -16,11 +19,25 @@ type Props = {
 };
 
 export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
+  const db = useSQLiteContext();
   const [layout, setLayout] = useState<'grid' | 'list'>('list');
   const [pendingDirectory, setPendingDirectory] = useState<DirectorySelection | null>(null);
   const [importProgress, setImportProgress] = useState<DirectoryImportProgress | null>(null);
+  const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const { videos, pickDirectory, importPickedDirectory, isLoading } = useLocalLibrary();
+  const { videos, getVideoById, pickDirectory, importPickedDirectory, isLoading } =
+    useLocalLibrary();
+
+  useFocusEffect(
+    useCallback(() => {
+      async function loadRecentVideos() {
+        const rows = await getRecentVideos(db, 3);
+        setRecentVideos(rows);
+      }
+
+      loadRecentVideos();
+    }, [db])
+  );
 
   async function handlePickDirectory() {
     setStatusMessage(null);
@@ -79,9 +96,9 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
           <Pressable style={appStyles.iconButton} onPress={onOpenSearch}>
             <Ionicons name="search" size={24} color={colors.text} />
           </Pressable>
-          <Pressable style={appStyles.softButton}>
+          {/* <Pressable style={appStyles.softButton}>
             <Text style={appStyles.softButtonText}>Upload</Text>
-          </Pressable>
+          </Pressable> */}
           <Pressable style={appStyles.scanButton} onPress={handlePickDirectory} disabled={isLoading}>
             <Text style={appStyles.scanButtonText}>
               {isLoading ? 'Loading...' : 'Scan Directory'}
@@ -147,10 +164,6 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
 
         {videos.length ? (
           <>
-            <Text style={appStyles.sectionTitle}>Latest videos</Text>
-            <Text style={appStyles.sectionMeta}>
-              Browse your local feed in grid or full-width list layout.
-            </Text>
             <View style={appStyles.toggleRow}>
               <Pressable
                 style={[
@@ -173,6 +186,52 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
                 <Text style={appStyles.toggleButtonText}>List</Text>
               </Pressable>
             </View>
+
+            <Text style={appStyles.sectionTitle}>Last three watched videos</Text>
+            {recentVideos.length ? (
+              <View
+                style={
+                  layout === 'grid' ? appStyles.searchResultsGrid : appStyles.searchResultsList
+                }
+              >
+                {recentVideos.map((item) => {
+                  const matchedVideo = getVideoById(item.video_id);
+
+                  return (
+                    <VideoCard
+                      key={item.video_id}
+                      video={{
+                        id: item.video_id,
+                        title: item.title,
+                        creator: item.creator,
+                        image: item.thumbnail || matchedVideo?.image,
+                        duration: item.duration,
+                        views: item.views,
+                        video: matchedVideo?.video ?? '',
+                        description:
+                          matchedVideo?.description ?? 'Recently watched local video.',
+                        subscribers: matchedVideo?.subscribers ?? 'Watch history',
+                        published: matchedVideo?.published ?? 'Recently viewed',
+                        channelId: matchedVideo?.channelId,
+                        channelTitle: matchedVideo?.channelTitle,
+                        source: matchedVideo?.source ?? 'imported',
+                      }}
+                      layout={layout === 'list' ? 'home' : 'grid'}
+                      onPress={onOpenVideo}
+                    />
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={appStyles.emptyState}>
+                <Text style={appStyles.emptyStateTitle}>No watched videos yet</Text>
+                <Text style={appStyles.emptyStateText}>
+                  Open a few videos and your last three watched clips will show up here.
+                </Text>
+              </View>
+            )}
+
+            <Text style={appStyles.sectionTitle}>Latest videos</Text>
             <View
               style={
                 layout === 'grid' ? appStyles.searchResultsGrid : appStyles.searchResultsList
