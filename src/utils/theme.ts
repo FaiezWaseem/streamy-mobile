@@ -31,6 +31,7 @@ export const appStyles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
+    paddingTop: 12,
   },
   authContent: {
     flexGrow: 1,
@@ -331,6 +332,42 @@ export const appStyles = StyleSheet.create({
     color: colors.white,
     fontSize: 14,
     fontWeight: '800',
+  },
+  directoryReviewCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 18,
+    gap: 14,
+  },
+  directoryReviewRow: {
+    gap: 6,
+  },
+  directoryReviewLabel: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  directoryReviewValue: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  directoryReviewPath: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  directoryReviewActions: {
+    gap: 12,
+  },
+  directoryProgressFile: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 8,
   },
   emptyState: {
     backgroundColor: colors.surface,

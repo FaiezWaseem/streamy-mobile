@@ -26,13 +26,35 @@ import {
 } from '../utils/media';
 import { type ChannelItem, type VideoItem } from '../utils/types';
 
+type DirectoryVideoEntry = {
+  name: string;
+  uri: string;
+};
+
+export type DirectorySelection = {
+  directoryUri: string;
+  title: string;
+  totalVideos: number;
+  entries: DirectoryVideoEntry[];
+};
+
+export type DirectoryImportProgress = {
+  imported: number;
+  total: number;
+  currentFileName: string;
+};
+
 type LocalLibraryContextValue = {
   channels: ChannelItem[];
   videos: VideoItem[];
   permissionGranted: boolean | null;
   isLoading: boolean;
   refreshLibrary: () => Promise<void>;
-  pickDirectory: () => Promise<void>;
+  pickDirectory: () => Promise<DirectorySelection | null>;
+  importPickedDirectory: (
+    selection: DirectorySelection,
+    onProgress?: (progress: DirectoryImportProgress) => void
+  ) => Promise<{ imported: number; title: string }>;
   deleteVideo: (videoId: string) => Promise<{ removed: boolean; message: string }>;
   deleteChannel: (channelId: string) => Promise<{ removed: boolean; message: string }>;
   getChannelVideos: (channelId: string) => VideoItem[];
@@ -51,6 +73,19 @@ function directoryChannelId(directoryUri: string) {
 
 function isVideoFileName(name: string) {
   return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name);
+}
+
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mergeDirectoryVideos(existingVideos: VideoItem[], nextDirectoryVideos: VideoItem[]) {
+  const directoryChannelIds = new Set(nextDirectoryVideos.map((video) => video.channelId));
+
+  return [
+    ...existingVideos.filter((video) => !directoryChannelIds.has(video.channelId)),
+    ...nextDirectoryVideos,
+  ];
 }
 
 function mapVideosToChannels(videos: VideoItem[]): ChannelItem[] {
@@ -109,6 +144,67 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
     );
   }, [db]);
 
+  const getDirectoryEntries = useCallback(async (directoryUri: string) => {
+    const directory = new Directory(directoryUri);
+    const entries = directory.list();
+
+    return entries
+      .filter((entry) => isVideoFileName(entry.name))
+      .map((entry) => ({ name: entry.name, uri: entry.uri }));
+  }, []);
+
+  const buildDirectoryVideos = useCallback(
+    async (
+      directoryUri: string,
+      title: string,
+      entries: DirectoryVideoEntry[],
+      onProgress?: (progress: DirectoryImportProgress) => void
+    ) => {
+      const nextVideos: VideoItem[] = [];
+
+      for (const [index, entry] of entries.entries()) {
+        const thumbnailUri = await generateThumbnail(entry.uri);
+        const duration = await extractDurationFromUri(entry.uri);
+        console.log('[library] directory video discovered', {
+          entryName: entry.name,
+          entryUri: entry.uri,
+          channelTitle: title,
+          thumbnailUri,
+          duration,
+        });
+
+        nextVideos.push({
+          id: `${directoryUri}:${entry.name}`,
+          title: entry.name.replace(/\.[^/.]+$/, '') || 'Directory video',
+          creator: title,
+          channelId: directoryChannelId(directoryUri),
+          channelTitle: title,
+          image: thumbnailUri,
+          video: entry.uri,
+          duration,
+          views: 'Directory file',
+          description: `Loaded from selected directory "${title}".`,
+          subscribers: 'Directory source',
+          published: 'From picked folder',
+          source: 'library',
+        });
+
+        onProgress?.({
+          imported: index + 1,
+          total: entries.length,
+          currentFileName: entry.name,
+        });
+
+        if ((index + 1) % 5 === 0) {
+          await sleep();
+        }
+      }
+
+      return nextVideos;
+    },
+    []
+  );
+
   const loadScannedDirectories = useCallback(async () => {
     const rows = await getScannedDirectories(db);
     console.log('[library] loading scanned directories', { count: rows.length, rows });
@@ -116,45 +212,15 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
 
     for (const row of rows as ScannedDirectoryRow[]) {
       try {
-        const directory = new Directory(row.directory_uri);
-        const entries = directory.list();
+        const entries = await getDirectoryEntries(row.directory_uri);
         console.log('[library] scanning directory', {
           title: row.title,
           directoryUri: row.directory_uri,
           entryCount: entries.length,
         });
-
-        for (const entry of entries) {
-          if (!isVideoFileName(entry.name)) {
-            continue;
-          }
-
-          const thumbnailUri = await generateThumbnail(entry.uri);
-          const duration = await extractDurationFromUri(entry.uri);
-          console.log('[library] directory video discovered', {
-            entryName: entry.name,
-            entryUri: entry.uri,
-            channelTitle: row.title,
-            thumbnailUri,
-            duration,
-          });
-
-          nextVideos.push({
-            id: `${row.directory_uri}:${entry.name}`,
-            title: entry.name.replace(/\.[^/.]+$/, '') || 'Directory video',
-            creator: row.title,
-            channelId: directoryChannelId(row.directory_uri),
-            channelTitle: row.title,
-            image: thumbnailUri,
-            video: entry.uri,
-            duration,
-            views: 'Directory file',
-            description: `Loaded from selected directory "${row.title}".`,
-            subscribers: 'Directory source',
-            published: 'From picked folder',
-            source: 'library',
-          });
-        }
+        nextVideos.push(
+          ...(await buildDirectoryVideos(row.directory_uri, row.title, entries))
+        );
       } catch (error) {
         console.log('[library] failed to read scanned directory', {
           directoryUri: row.directory_uri,
@@ -166,7 +232,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
 
     console.log('[library] scanned directory videos ready', { count: nextVideos.length });
     setDirectoryVideos(nextVideos);
-  }, [db]);
+  }, [buildDirectoryVideos, db, getDirectoryEntries]);
 
   const refreshLibrary = useCallback(async () => {
     setIsLoading(true);
@@ -184,16 +250,56 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
     console.log('[library] opening directory picker');
     const picked = await Directory.pickDirectoryAsync();
     const title = Paths.basename(picked.uri) || 'Picked directory';
-    console.log('[library] directory picked', { uri: picked.uri, title });
-
-    await saveScannedDirectory(db, {
-      directory_uri: picked.uri,
+    const entries = await getDirectoryEntries(picked.uri);
+    console.log('[library] directory picked', {
+      uri: picked.uri,
       title,
+      totalVideos: entries.length,
     });
-    console.log('[library] scanned directory saved in sqlite', { uri: picked.uri, title });
 
-    await loadScannedDirectories();
-  }, [db, loadScannedDirectories]);
+    return {
+      directoryUri: picked.uri,
+      title,
+      totalVideos: entries.length,
+      entries,
+    };
+  }, [getDirectoryEntries]);
+
+  const importPickedDirectory = useCallback(
+    async (
+      selection: DirectorySelection,
+      onProgress?: (progress: DirectoryImportProgress) => void
+    ) => {
+      setIsLoading(true);
+
+      try {
+        console.log('[library] importing picked directory', {
+          uri: selection.directoryUri,
+          title: selection.title,
+          totalVideos: selection.totalVideos,
+        });
+        const nextVideos = await buildDirectoryVideos(
+          selection.directoryUri,
+          selection.title,
+          selection.entries,
+          onProgress
+        );
+        await saveScannedDirectory(db, {
+          directory_uri: selection.directoryUri,
+          title: selection.title,
+        });
+        setDirectoryVideos((current) => mergeDirectoryVideos(current, nextVideos));
+
+        return {
+          imported: nextVideos.length,
+          title: selection.title,
+        };
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [buildDirectoryVideos, db]
+  );
 
   const deleteVideo = useCallback(
     async (videoId: string) => {
@@ -272,6 +378,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       isLoading,
       refreshLibrary,
       pickDirectory,
+      importPickedDirectory,
       deleteVideo,
       deleteChannel,
       getChannelVideos,
@@ -284,6 +391,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       isLoading,
       refreshLibrary,
       pickDirectory,
+      importPickedDirectory,
       deleteVideo,
       deleteChannel,
       getChannelVideos,
