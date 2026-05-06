@@ -1,4 +1,5 @@
 import { useIsFocused } from '@react-navigation/native';
+import { useEvent } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -85,15 +86,34 @@ type ReelItemProps = {
   onOpenSaved: () => void;
 };
 
+function formatPlaybackTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return '00:00';
+  }
+
+  const wholeSeconds = Math.floor(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainingSeconds = wholeSeconds % 60;
+
+  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds
+    .toString()
+    .padStart(2, '0')}`;
+}
+
 function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
   const player = useVideoPlayer(item.video, (videoPlayer) => {
     videoPlayer.loop = true;
     videoPlayer.playbackRate = 1;
+    videoPlayer.timeUpdateEventInterval = 0.25;
   });
+  const timeUpdate = useEvent(player, 'timeUpdate', null);
+  const sourceLoad = useEvent(player, 'sourceLoad', null);
   const [isPortraitReel, setIsPortraitReel] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [isSpeedBoosted, setIsSpeedBoosted] = useState(false);
   const longPressTriggeredRef = useRef(false);
+  const elapsedTimeLabel = formatPlaybackTime(timeUpdate?.currentTime ?? 0);
+  const totalTimeLabel = formatPlaybackTime(sourceLoad?.duration ?? 0);
 
   useEffect(() => {
     if (isActive) {
@@ -209,7 +229,9 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
       </View>
       <View pointerEvents="none" style={appStyles.reelOverlay} />
       <View style={appStyles.reelDurationBadge}>
-        <Text style={appStyles.reelDurationText}>{item.duration}</Text>
+        <Text style={appStyles.reelDurationText}>
+          {elapsedTimeLabel} / {totalTimeLabel}
+        </Text>
       </View>
       {isPaused ? (
         <View style={appStyles.reelPlaybackBadge}>
