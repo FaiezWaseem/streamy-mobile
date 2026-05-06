@@ -33,6 +33,12 @@ export const appStyles = StyleSheet.create({
     backgroundColor: colors.background,
     paddingTop: 12,
   },
+  reelsScreen: {
+    paddingTop: 0,
+  },
+  reelsList: {
+    flex: 1,
+  },
   authContent: {
     flexGrow: 1,
     padding: 24,
@@ -413,7 +419,7 @@ export const appStyles = StyleSheet.create({
   reelActions: {
     position: 'absolute',
     right: 16,
-    bottom: 120,
+    bottom: 156,
     gap: 22,
     alignItems: 'center',
   },
@@ -435,7 +441,9 @@ export const appStyles = StyleSheet.create({
     fontWeight: '600',
   },
   reelCaption: {
-    padding: 20,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 108,
     backgroundColor: 'rgba(0,0,0,0.28)',
   },
   reelCreator: {

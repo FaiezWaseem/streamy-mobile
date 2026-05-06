@@ -3,9 +3,9 @@ import { useEvent } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Dimensions,
   FlatList,
   Image,
+  LayoutChangeEvent,
   Pressable,
   SafeAreaView,
   Text,
@@ -26,6 +26,7 @@ export function ReelsScreen({ onOpenSaved }: Props) {
   const { videos } = useLocalLibrary();
   const isFocused = useIsFocused();
   const [activeReelId, setActiveReelId] = useState<string | undefined>(videos[0]?.id);
+  const [reelViewportHeight, setReelViewportHeight] = useState(0);
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 75 }), []);
   const onViewableItemsChanged = useRef(
     ({ viewableItems }: { viewableItems: Array<ViewToken> }) => {
@@ -42,27 +43,45 @@ export function ReelsScreen({ onOpenSaved }: Props) {
     }
   }, [activeReelId, videos]);
 
+  function handleLayout(event: LayoutChangeEvent) {
+    const nextHeight = Math.round(event.nativeEvent.layout.height);
+
+    setReelViewportHeight((currentHeight) =>
+      currentHeight === nextHeight ? currentHeight : nextHeight
+    );
+  }
+
   return (
-    <SafeAreaView style={appStyles.screen}>
+    <SafeAreaView
+      style={[appStyles.screen, appStyles.reelsScreen]}
+      onLayout={handleLayout}
+    >
       {videos.length ? (
         <FlatList
           data={videos}
           keyExtractor={(item) => item.id}
-          pagingEnabled
+          style={appStyles.reelsList}
+          snapToInterval={reelViewportHeight || undefined}
+          disableIntervalMomentum
           decelerationRate="fast"
           showsVerticalScrollIndicator={false}
           viewabilityConfig={viewabilityConfig}
           onViewableItemsChanged={onViewableItemsChanged.current}
-          getItemLayout={(_, index) => ({
-            length: Dimensions.get('window').height,
-            offset: Dimensions.get('window').height * index,
-            index,
-          })}
+          getItemLayout={
+            reelViewportHeight
+              ? (_, index) => ({
+                  length: reelViewportHeight,
+                  offset: reelViewportHeight * index,
+                  index,
+                })
+              : undefined
+          }
           renderItem={({ item }) => (
             <ReelItem
               item={item}
               isActive={isFocused && activeReelId === item.id}
               onOpenSaved={onOpenSaved}
+              reelHeight={reelViewportHeight}
             />
           )}
         />
@@ -84,6 +103,7 @@ type ReelItemProps = {
   item: VideoItem;
   isActive: boolean;
   onOpenSaved: () => void;
+  reelHeight: number;
 };
 
 function formatPlaybackTime(seconds: number) {
@@ -100,7 +120,7 @@ function formatPlaybackTime(seconds: number) {
     .padStart(2, '0')}`;
 }
 
-function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
+function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
   const player = useVideoPlayer(item.video, (videoPlayer) => {
     videoPlayer.loop = true;
     videoPlayer.playbackRate = 1;
@@ -168,8 +188,6 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
     };
   }, [item.image]);
 
-  const reelHeight = Dimensions.get('window').height;
-
   function handleTogglePlayback() {
     if (!isActive) {
       return;
@@ -212,7 +230,7 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
 
   return (
     <Pressable
-      style={[appStyles.reelSlide, { height: reelHeight }]}
+      style={[appStyles.reelSlide, reelHeight ? { height: reelHeight } : null]}
       onPress={handleTogglePlayback}
       onLongPress={handleSpeedBoostStart}
       onPressOut={handleSpeedBoostEnd}
