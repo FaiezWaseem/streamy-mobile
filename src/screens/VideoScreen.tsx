@@ -60,12 +60,12 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
   );
   const player = useVideoPlayer(video.video, (videoPlayer) => {
     videoPlayer.loop = false;
-    videoPlayer.play();
+    videoPlayer.pause();
   });
 
   useEffect(() => {
     player.replace(video.video);
-    player.play();
+    player.pause();
   }, [player, video.video]);
 
   useEffect(() => {

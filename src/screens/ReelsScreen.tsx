@@ -1,3 +1,4 @@
+import { useIsFocused } from '@react-navigation/native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -22,6 +23,7 @@ type Props = {
 
 export function ReelsScreen({ onOpenSaved }: Props) {
   const { videos } = useLocalLibrary();
+  const isFocused = useIsFocused();
   const [activeReelId, setActiveReelId] = useState<string | undefined>(videos[0]?.id);
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 75 }), []);
   const onViewableItemsChanged = useRef(
@@ -32,6 +34,12 @@ export function ReelsScreen({ onOpenSaved }: Props) {
       }
     }
   );
+
+  useEffect(() => {
+    if (!videos.some((video) => video.id === activeReelId)) {
+      setActiveReelId(videos[0]?.id);
+    }
+  }, [activeReelId, videos]);
 
   return (
     <SafeAreaView style={appStyles.screen}>
@@ -52,7 +60,7 @@ export function ReelsScreen({ onOpenSaved }: Props) {
           renderItem={({ item }) => (
             <ReelItem
               item={item}
-              isActive={activeReelId === item.id}
+              isActive={isFocused && activeReelId === item.id}
               onOpenSaved={onOpenSaved}
             />
           )}
@@ -104,6 +112,13 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
   }, [isActive, isPaused, player]);
 
   useEffect(() => {
+    return () => {
+      player.pause();
+      player.playbackRate = 1;
+    };
+  }, [player]);
+
+  useEffect(() => {
     let isMounted = true;
 
     if (!item.image) {
@@ -136,6 +151,10 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
   const reelHeight = Dimensions.get('window').height;
 
   function handleTogglePlayback() {
+    if (!isActive) {
+      return;
+    }
+
     if (longPressTriggeredRef.current) {
       longPressTriggeredRef.current = false;
       return;
@@ -155,6 +174,10 @@ function ReelItem({ item, isActive, onOpenSaved }: ReelItemProps) {
   }
 
   function handleSpeedBoostStart() {
+    if (!isActive) {
+      return;
+    }
+
     longPressTriggeredRef.current = true;
     player.playbackRate = 2;
     player.play();
