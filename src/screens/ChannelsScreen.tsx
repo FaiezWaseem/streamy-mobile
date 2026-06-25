@@ -12,7 +12,7 @@ type Props = {
 export function ChannelsScreen({ onOpenChannel }: Props) {
   const [query, setQuery] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const { channels, refreshLibrary, isLoading, deleteChannel } = useLocalLibrary();
+  const { channels, rescanScannedDirectories, isLoading, deleteChannel } = useLocalLibrary();
 
   const filteredChannels = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -44,6 +44,17 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
     );
   }
 
+  async function handleRescanLibrary() {
+    setStatusMessage(null);
+    const result = await rescanScannedDirectories();
+
+    setStatusMessage(
+      result.total
+        ? `Rescanned ${result.imported} cached videos from local directories.`
+        : 'No scanned directories found yet. Use Scan Directory from Home first.'
+    );
+  }
+
   return (
     <SafeAreaView style={appStyles.screen}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={appStyles.pageContent}>
@@ -58,9 +69,15 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
           placeholder="Search channels"
           placeholderTextColor={colors.textMuted}
         />
-        <Pressable style={appStyles.primaryButton} onPress={refreshLibrary}>
+        <Pressable
+          style={appStyles.primaryButton}
+          onPress={() => {
+            void handleRescanLibrary();
+          }}
+          disabled={isLoading}
+        >
           <Text style={appStyles.primaryButtonText}>
-            {isLoading ? 'Scanning videos...' : 'Refresh Local Videos'}
+            {isLoading ? 'Scanning videos...' : 'Rescan Local Videos'}
           </Text>
         </Pressable>
         {statusMessage ? (

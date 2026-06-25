@@ -49,6 +49,24 @@ export type ScannedDirectoryRow = {
   title: string;
 };
 
+export type DirectoryVideoRow = {
+  video_id: string;
+  directory_uri: string;
+  file_name: string;
+  title: string;
+  creator: string;
+  channel_id: string;
+  channel_title: string;
+  video_uri: string;
+  thumbnail: string | null;
+  duration: string;
+  views: string;
+  description: string;
+  subscribers: string;
+  published: string;
+  indexed_at: string;
+};
+
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const currentVersion = result?.user_version ?? 0;
@@ -121,7 +139,31 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     `);
   }
 
-  await db.execAsync(`PRAGMA user_version = 4;`);
+  if (currentVersion < 5) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS directory_videos (
+        video_id TEXT PRIMARY KEY NOT NULL,
+        directory_uri TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        title TEXT NOT NULL,
+        creator TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_title TEXT NOT NULL,
+        video_uri TEXT NOT NULL,
+        thumbnail TEXT,
+        duration TEXT NOT NULL,
+        views TEXT NOT NULL,
+        description TEXT NOT NULL,
+        subscribers TEXT NOT NULL,
+        published TEXT NOT NULL,
+        indexed_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_directory_videos_directory_uri
+        ON directory_videos(directory_uri);
+    `);
+  }
+
+  await db.execAsync(`PRAGMA user_version = 5;`);
 }
 
 export async function recordVideoView(db: SQLiteDatabase, video: VideoItem) {
@@ -227,13 +269,61 @@ export async function getScannedDirectories(db: SQLiteDatabase) {
   );
 }
 
+export async function saveDirectoryVideos(
+  db: SQLiteDatabase,
+  directoryUri: string,
+  videos: DirectoryVideoRow[]
+) {
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(`DELETE FROM directory_videos WHERE directory_uri = ?`, [
+      directoryUri,
+    ]);
+
+    for (const video of videos) {
+      await txn.runAsync(
+        `INSERT OR REPLACE INTO directory_videos (
+          video_id, directory_uri, file_name, title, creator, channel_id,
+          channel_title, video_uri, thumbnail, duration, views, description,
+          subscribers, published, indexed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          video.video_id,
+          video.directory_uri,
+          video.file_name,
+          video.title,
+          video.creator,
+          video.channel_id,
+          video.channel_title,
+          video.video_uri,
+          video.thumbnail,
+          video.duration,
+          video.views,
+          video.description,
+          video.subscribers,
+          video.published,
+          video.indexed_at,
+        ]
+      );
+    }
+  });
+}
+
+export async function getDirectoryVideos(db: SQLiteDatabase) {
+  return db.getAllAsync<DirectoryVideoRow>(
+    `SELECT * FROM directory_videos ORDER BY datetime(indexed_at) DESC, rowid DESC`
+  );
+}
+
 export async function deleteScannedDirectory(db: SQLiteDatabase, directoryUri: string) {
   const rows = await db.getAllAsync<{ video_id: string }>(
-    `SELECT video_id FROM recent_videos WHERE video_id LIKE ?`,
-    [`${directoryUri}:%`]
+    `SELECT video_id FROM directory_videos WHERE directory_uri = ?
+     UNION
+     SELECT video_id FROM recent_videos WHERE video_id LIKE ?`,
+    [directoryUri, `${directoryUri}:%`]
   );
 
   await db.runAsync(`DELETE FROM scanned_directories WHERE directory_uri = ?`, [directoryUri]);
+  await db.runAsync(`DELETE FROM directory_videos WHERE directory_uri = ?`, [directoryUri]);
 
   for (const row of rows) {
     await deleteVideoReferences(db, row.video_id);
