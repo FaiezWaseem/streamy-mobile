@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 
 import { appStyles } from '../utils/theme';
@@ -9,13 +10,52 @@ type Props = {
   onPress: (videoId: string) => void;
 };
 
+const PREVIEW_FRAME_INTERVAL_MS = 220;
+
 export function VideoCard({ video, layout, onPress }: Props) {
   const isGrid = layout === 'grid';
   const isHome = layout === 'home';
+  const frames = video.previewFrames;
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const previewIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewIntervalRef.current) {
+        clearInterval(previewIntervalRef.current);
+      }
+    };
+  }, []);
+
+  function startPreview() {
+    if (!frames || frames.length < 2) {
+      return;
+    }
+
+    setFrameIndex(0);
+    setIsPreviewing(true);
+    previewIntervalRef.current = setInterval(() => {
+      setFrameIndex((current) => (current + 1) % frames.length);
+    }, PREVIEW_FRAME_INTERVAL_MS);
+  }
+
+  function stopPreview() {
+    if (previewIntervalRef.current) {
+      clearInterval(previewIntervalRef.current);
+      previewIntervalRef.current = null;
+    }
+    setIsPreviewing(false);
+  }
+
+  const displayImage = isPreviewing && frames ? frames[frameIndex] : video.image;
 
   return (
     <Pressable
       onPress={() => onPress(video.id)}
+      onLongPress={startPreview}
+      onPressOut={stopPreview}
+      delayLongPress={220}
       style={
         isGrid
           ? appStyles.videoCardGrid
@@ -33,9 +73,9 @@ export function VideoCard({ video, layout, onPress }: Props) {
             : appStyles.videoCardListImageWrap
         }
       >
-        {video.image ? (
+        {displayImage ? (
           <Image
-            source={{ uri: video.image }}
+            source={{ uri: displayImage }}
             style={
               isGrid
                 ? appStyles.videoCardGridImage

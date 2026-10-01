@@ -65,6 +65,9 @@ export type DirectoryVideoRow = {
   subscribers: string;
   published: string;
   indexed_at: string;
+  duration_seconds: number;
+  preview_frames: string | null;
+  preview_status: 'pending' | 'ready' | 'failed';
 };
 
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
@@ -163,7 +166,17 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     `);
   }
 
-  await db.execAsync(`PRAGMA user_version = 5;`);
+  if (currentVersion < 6) {
+    await db.execAsync(`
+      ALTER TABLE directory_videos ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE directory_videos ADD COLUMN preview_frames TEXT;
+      ALTER TABLE directory_videos ADD COLUMN preview_status TEXT NOT NULL DEFAULT 'pending';
+      CREATE INDEX IF NOT EXISTS idx_directory_videos_preview_status
+        ON directory_videos(preview_status);
+    `);
+  }
+
+  await db.execAsync(`PRAGMA user_version = 6;`);
 }
 
 export async function recordVideoView(db: SQLiteDatabase, video: VideoItem) {
@@ -269,6 +282,35 @@ export async function getScannedDirectories(db: SQLiteDatabase) {
   );
 }
 
+const DIRECTORY_VIDEO_COLUMNS = `
+  video_id, directory_uri, file_name, title, creator, channel_id,
+  channel_title, video_uri, thumbnail, duration, views, description,
+  subscribers, published, indexed_at, duration_seconds, preview_frames, preview_status
+`;
+
+function directoryVideoParams(video: DirectoryVideoRow) {
+  return [
+    video.video_id,
+    video.directory_uri,
+    video.file_name,
+    video.title,
+    video.creator,
+    video.channel_id,
+    video.channel_title,
+    video.video_uri,
+    video.thumbnail,
+    video.duration,
+    video.views,
+    video.description,
+    video.subscribers,
+    video.published,
+    video.indexed_at,
+    video.duration_seconds,
+    video.preview_frames,
+    video.preview_status,
+  ];
+}
+
 export async function saveDirectoryVideos(
   db: SQLiteDatabase,
   directoryUri: string,
@@ -281,36 +323,69 @@ export async function saveDirectoryVideos(
 
     for (const video of videos) {
       await txn.runAsync(
-        `INSERT OR REPLACE INTO directory_videos (
-          video_id, directory_uri, file_name, title, creator, channel_id,
-          channel_title, video_uri, thumbnail, duration, views, description,
-          subscribers, published, indexed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          video.video_id,
-          video.directory_uri,
-          video.file_name,
-          video.title,
-          video.creator,
-          video.channel_id,
-          video.channel_title,
-          video.video_uri,
-          video.thumbnail,
-          video.duration,
-          video.views,
-          video.description,
-          video.subscribers,
-          video.published,
-          video.indexed_at,
-        ]
+        `INSERT OR REPLACE INTO directory_videos (${DIRECTORY_VIDEO_COLUMNS})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        directoryVideoParams(video)
       );
     }
   });
 }
 
+export async function upsertDirectoryVideos(db: SQLiteDatabase, videos: DirectoryVideoRow[]) {
+  if (!videos.length) {
+    return;
+  }
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    for (const video of videos) {
+      await txn.runAsync(
+        `INSERT OR REPLACE INTO directory_videos (${DIRECTORY_VIDEO_COLUMNS})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        directoryVideoParams(video)
+      );
+    }
+  });
+}
+
+export async function pruneDirectoryVideos(
+  db: SQLiteDatabase,
+  directoryUri: string,
+  keepVideoIds: string[]
+) {
+  if (!keepVideoIds.length) {
+    await db.runAsync(`DELETE FROM directory_videos WHERE directory_uri = ?`, [directoryUri]);
+    return;
+  }
+
+  const placeholders = keepVideoIds.map(() => '?').join(',');
+  await db.runAsync(
+    `DELETE FROM directory_videos WHERE directory_uri = ? AND video_id NOT IN (${placeholders})`,
+    [directoryUri, ...keepVideoIds]
+  );
+}
+
 export async function getDirectoryVideos(db: SQLiteDatabase) {
   return db.getAllAsync<DirectoryVideoRow>(
     `SELECT * FROM directory_videos ORDER BY datetime(indexed_at) DESC, rowid DESC`
+  );
+}
+
+export async function getPendingPreviewVideos(db: SQLiteDatabase, limit = 6) {
+  return db.getAllAsync<DirectoryVideoRow>(
+    `SELECT * FROM directory_videos WHERE preview_status = 'pending' ORDER BY rowid DESC LIMIT ?`,
+    [limit]
+  );
+}
+
+export async function savePreviewFrames(
+  db: SQLiteDatabase,
+  videoId: string,
+  frameUris: string[] | null,
+  status: 'ready' | 'failed'
+) {
+  await db.runAsync(
+    `UPDATE directory_videos SET preview_frames = ?, preview_status = ? WHERE video_id = ?`,
+    [frameUris ? JSON.stringify(frameUris) : null, status, videoId]
   );
 }
 

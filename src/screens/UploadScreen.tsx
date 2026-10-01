@@ -19,6 +19,7 @@ import { saveImportedVideo } from '../utils/database';
 import {
   extractDurationInfoFromUri,
   formatDuration,
+  generateBestThumbnail,
   generateThumbnail,
 } from '../utils/media';
 import { appStyles, colors } from '../utils/theme';
@@ -83,7 +84,7 @@ export function UploadScreen() {
     const durationInfo = await extractDurationInfoFromUri(uri);
     const nextDurationSeconds = durationInfo.seconds;
     const safeFrameSeconds = Math.min(1, nextDurationSeconds > 0 ? nextDurationSeconds : 1);
-    const thumb = await generateThumbnail(uri, safeFrameSeconds * 1000);
+    const thumb = await generateBestThumbnail(uri, nextDurationSeconds);
 
     setThumbnailUri(thumb ?? null);
     setDuration(durationInfo.formatted);

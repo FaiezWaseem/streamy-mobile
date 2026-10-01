@@ -6,28 +6,40 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
+import { InteractionManager } from 'react-native';
 
 import {
   deleteImportedVideo,
   deleteImportedVideosByChannel,
   deleteScannedDirectory,
   getDirectoryVideos,
+  getPendingPreviewVideos,
   getScannedDirectories,
   getImportedVideos,
-  saveDirectoryVideos,
+  pruneDirectoryVideos,
+  savePreviewFrames,
   saveScannedDirectory,
+  upsertDirectoryVideos,
   type DirectoryVideoRow,
   type ImportedVideoRow,
   type ScannedDirectoryRow,
 } from '../utils/database';
+import { mapWithConcurrency } from '../utils/concurrency';
 import {
-  extractDurationFromUri,
-  generateThumbnail,
+  extractDurationInfoFromUri,
+  generateBestThumbnail,
+  generatePreviewFrames,
 } from '../utils/media';
 import { type ChannelItem, type VideoItem } from '../utils/types';
+
+const DIRECTORY_SCAN_CONCURRENCY = 4;
+const DIRECTORY_SCAN_FLUSH_BATCH_SIZE = 10;
+const PREVIEW_QUEUE_BATCH_SIZE = 6;
+const PREVIEW_QUEUE_CONCURRENCY = 2;
 
 type DirectoryVideoEntry = {
   name: string;
@@ -83,17 +95,14 @@ function isVideoFileName(name: string) {
   return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name);
 }
 
-function sleep(ms = 0) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+function upsertVideosById(existingVideos: VideoItem[], nextVideos: VideoItem[]) {
+  const byId = new Map(existingVideos.map((video) => [video.id, video]));
 
-function mergeDirectoryVideos(existingVideos: VideoItem[], nextDirectoryVideos: VideoItem[]) {
-  const directoryChannelIds = new Set(nextDirectoryVideos.map((video) => video.channelId));
+  for (const video of nextVideos) {
+    byId.set(video.id, video);
+  }
 
-  return [
-    ...existingVideos.filter((video) => !directoryChannelIds.has(video.channelId)),
-    ...nextDirectoryVideos,
-  ];
+  return Array.from(byId.values());
 }
 
 function mapVideosToChannels(videos: VideoItem[]): ChannelItem[] {
@@ -138,6 +147,7 @@ function mapDirectoryVideoRow(row: DirectoryVideoRow): VideoItem {
     subscribers: row.subscribers,
     published: row.published,
     source: 'library',
+    previewFrames: row.preview_frames ? JSON.parse(row.preview_frames) : undefined,
   };
 }
 
@@ -145,7 +155,8 @@ function mapDirectoryVideoToRow(
   video: VideoItem,
   directoryUri: string,
   fileName: string,
-  indexedAt: string
+  indexedAt: string,
+  durationSeconds: number
 ): DirectoryVideoRow {
   return {
     video_id: video.id,
@@ -163,6 +174,9 @@ function mapDirectoryVideoToRow(
     subscribers: video.subscribers,
     published: video.published,
     indexed_at: indexedAt,
+    duration_seconds: durationSeconds,
+    preview_frames: null,
+    preview_status: 'pending',
   };
 }
 
@@ -217,52 +231,131 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       directoryUri: string,
       title: string,
       entries: DirectoryVideoEntry[],
-      onProgress?: (progress: DirectoryImportProgress) => void
+      onProgress?: (progress: DirectoryImportProgress) => void,
+      onVideoReady?: (video: VideoItem) => void
     ) => {
-      const nextVideos: VideoItem[] = [];
+      const indexedAt = new Date().toISOString();
+      let completed = 0;
+      let pendingRows: DirectoryVideoRow[] = [];
+      let writeChain: Promise<void> = Promise.resolve();
 
-      for (const [index, entry] of entries.entries()) {
-        const thumbnailUri = await generateThumbnail(entry.uri);
-        const duration = await extractDurationFromUri(entry.uri);
-        console.log('[library] directory video discovered', {
-          entryName: entry.name,
-          entryUri: entry.uri,
-          channelTitle: title,
-          thumbnailUri,
-          duration,
-        });
-
-        nextVideos.push({
-          id: directoryVideoId(directoryUri, entry.name),
-          title: entry.name.replace(/\.[^/.]+$/, '') || 'Directory video',
-          creator: title,
-          channelId: directoryChannelId(directoryUri),
-          channelTitle: title,
-          image: thumbnailUri,
-          video: entry.uri,
-          duration,
-          views: 'Directory file',
-          description: `Loaded from selected directory "${title}".`,
-          subscribers: 'Directory source',
-          published: 'From picked folder',
-          source: 'library',
-        });
-
-        onProgress?.({
-          imported: index + 1,
-          total: entries.length,
-          currentFileName: entry.name,
-        });
-
-        if ((index + 1) % 5 === 0) {
-          await sleep();
+      function scheduleFlush(force = false) {
+        if (!pendingRows.length || (!force && pendingRows.length < DIRECTORY_SCAN_FLUSH_BATCH_SIZE)) {
+          return;
         }
+
+        const rowsToWrite = pendingRows;
+        pendingRows = [];
+        writeChain = writeChain.then(() => upsertDirectoryVideos(db, rowsToWrite));
       }
+
+      const nextVideos = await mapWithConcurrency(
+        entries,
+        DIRECTORY_SCAN_CONCURRENCY,
+        async (entry) => {
+          const durationInfo = await extractDurationInfoFromUri(entry.uri);
+          const thumbnailUri = await generateBestThumbnail(entry.uri, durationInfo.seconds);
+
+          console.log('[library] directory video discovered', {
+            entryName: entry.name,
+            entryUri: entry.uri,
+            channelTitle: title,
+            thumbnailUri,
+            duration: durationInfo.formatted,
+          });
+
+          const video: VideoItem = {
+            id: directoryVideoId(directoryUri, entry.name),
+            title: entry.name.replace(/\.[^/.]+$/, '') || 'Directory video',
+            creator: title,
+            channelId: directoryChannelId(directoryUri),
+            channelTitle: title,
+            image: thumbnailUri,
+            video: entry.uri,
+            duration: durationInfo.formatted,
+            views: 'Directory file',
+            description: `Loaded from selected directory "${title}".`,
+            subscribers: 'Directory source',
+            published: 'From picked folder',
+            source: 'library',
+          };
+
+          pendingRows.push(
+            mapDirectoryVideoToRow(video, directoryUri, entry.name, indexedAt, durationInfo.seconds)
+          );
+
+          completed += 1;
+          onProgress?.({
+            imported: completed,
+            total: entries.length,
+            currentFileName: entry.name,
+          });
+          onVideoReady?.(video);
+          scheduleFlush();
+
+          return video;
+        }
+      );
+
+      scheduleFlush(true);
+      await writeChain;
 
       return nextVideos;
     },
-    []
+    [db]
   );
+
+  const previewQueueRunningRef = useRef(false);
+
+  const runPreviewQueueBatch = useCallback(async () => {
+    const pending = await getPendingPreviewVideos(db, PREVIEW_QUEUE_BATCH_SIZE);
+
+    if (!pending.length) {
+      return false;
+    }
+
+    await mapWithConcurrency(pending, PREVIEW_QUEUE_CONCURRENCY, async (row) => {
+      try {
+        const frames = await generatePreviewFrames(row.video_uri, row.duration_seconds);
+        await savePreviewFrames(db, row.video_id, frames.length ? frames : null, frames.length ? 'ready' : 'failed');
+
+        if (frames.length) {
+          setDirectoryVideos((current) =>
+            current.map((video) =>
+              video.id === row.video_id ? { ...video, previewFrames: frames } : video
+            )
+          );
+        }
+      } catch (error) {
+        console.log('[library] preview frame generation failed', { videoId: row.video_id, error });
+        await savePreviewFrames(db, row.video_id, null, 'failed');
+      }
+    });
+
+    return pending.length === PREVIEW_QUEUE_BATCH_SIZE;
+  }, [db]);
+
+  const schedulePreviewQueue = useCallback(() => {
+    if (previewQueueRunningRef.current) {
+      return;
+    }
+    previewQueueRunningRef.current = true;
+
+    (async () => {
+      try {
+        let hasMore = true;
+
+        while (hasMore) {
+          await new Promise<void>((resolve) => {
+            InteractionManager.runAfterInteractions(() => resolve());
+          });
+          hasMore = await runPreviewQueueBatch();
+        }
+      } finally {
+        previewQueueRunningRef.current = false;
+      }
+    })();
+  }, [runPreviewQueueBatch]);
 
   const rescanScannedDirectories = useCallback(async () => {
     setIsLoading(true);
@@ -271,7 +364,6 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       const rows = await getScannedDirectories(db);
       const cachedRows = await getDirectoryVideos(db);
       const cachedById = new Map(cachedRows.map((row) => [row.video_id, row]));
-      const nextVideos: VideoItem[] = [];
       let totalEntries = 0;
 
       console.log('[library] rescanning scanned directories', {
@@ -294,59 +386,34 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
             missingCount: missingEntries.length,
           });
 
-          const generatedVideos = missingEntries.length
-            ? await buildDirectoryVideos(row.directory_uri, row.title, missingEntries)
-            : [];
-          const generatedById = new Map(
-            generatedVideos.map((video) => [video.id, video])
-          );
-          const indexedAt = new Date().toISOString();
-          const nextRows: DirectoryVideoRow[] = [];
-
-          for (const entry of entries) {
-            const videoId = directoryVideoId(row.directory_uri, entry.name);
-            const cached = cachedById.get(videoId);
-
-            if (cached) {
-              nextRows.push(cached);
-              continue;
-            }
-
-            const generated = generatedById.get(videoId);
-
-            if (generated) {
-              nextRows.push(
-                mapDirectoryVideoToRow(generated, row.directory_uri, entry.name, indexedAt)
-              );
-            }
+          if (missingEntries.length) {
+            // Persists newly-found videos to SQLite incrementally as it goes.
+            await buildDirectoryVideos(row.directory_uri, row.title, missingEntries);
           }
 
-          await saveDirectoryVideos(db, row.directory_uri, nextRows);
-          nextVideos.push(...nextRows.map(mapDirectoryVideoRow));
+          const keepIds = entries.map((entry) => directoryVideoId(row.directory_uri, entry.name));
+          await pruneDirectoryVideos(db, row.directory_uri, keepIds);
         } catch (error) {
           console.log('[library] failed to read scanned directory during rescan', {
             directoryUri: row.directory_uri,
             error,
           });
-          nextVideos.push(
-            ...cachedRows
-              .filter((cachedRow) => cachedRow.directory_uri === row.directory_uri)
-              .map(mapDirectoryVideoRow)
-          );
         }
       }
 
-      console.log('[library] directory video cache ready', { count: nextVideos.length });
-      setDirectoryVideos(nextVideos);
+      const refreshedRows = await getDirectoryVideos(db);
+      console.log('[library] directory video cache ready', { count: refreshedRows.length });
+      setDirectoryVideos(refreshedRows.map(mapDirectoryVideoRow));
+      schedulePreviewQueue();
 
       return {
-        imported: nextVideos.length,
+        imported: refreshedRows.length,
         total: totalEntries,
       };
     } finally {
       setIsLoading(false);
     }
-  }, [buildDirectoryVideos, db, getDirectoryEntries]);
+  }, [buildDirectoryVideos, db, getDirectoryEntries, schedulePreviewQueue]);
 
   const refreshLibrary = useCallback(async () => {
     setIsLoading(true);
@@ -391,27 +458,54 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
           title: selection.title,
           totalVideos: selection.totalVideos,
         });
-        const nextVideos = await buildDirectoryVideos(
-          selection.directoryUri,
-          selection.title,
-          selection.entries,
-          onProgress
-        );
-        const indexedAt = new Date().toISOString();
-        const nextRows = nextVideos.map((video, index) =>
-          mapDirectoryVideoToRow(
-            video,
-            selection.directoryUri,
-            selection.entries[index]?.name ?? video.title,
-            indexedAt
-          )
-        );
+
         await saveScannedDirectory(db, {
           directory_uri: selection.directoryUri,
           title: selection.title,
         });
-        await saveDirectoryVideos(db, selection.directoryUri, nextRows);
-        setDirectoryVideos((current) => mergeDirectoryVideos(current, nextVideos));
+
+        // Buffer incremental video completions and flush to UI state on a
+        // trailing debounce, so a 300-file scan doesn't trigger 300 re-renders.
+        let pendingUiVideos: VideoItem[] = [];
+        let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+        function flushUiVideos() {
+          if (!pendingUiVideos.length) {
+            return;
+          }
+          const videosToAdd = pendingUiVideos;
+          pendingUiVideos = [];
+          setDirectoryVideos((current) => upsertVideosById(current, videosToAdd));
+        }
+
+        function scheduleUiFlush() {
+          if (flushTimer) {
+            return;
+          }
+          flushTimer = setTimeout(() => {
+            flushTimer = null;
+            flushUiVideos();
+          }, 250);
+        }
+
+        const nextVideos = await buildDirectoryVideos(
+          selection.directoryUri,
+          selection.title,
+          selection.entries,
+          onProgress,
+          (video) => {
+            pendingUiVideos.push(video);
+            scheduleUiFlush();
+          }
+        );
+
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        flushUiVideos();
+
+        schedulePreviewQueue();
 
         return {
           imported: nextVideos.length,
@@ -421,7 +515,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     },
-    [buildDirectoryVideos, db]
+    [buildDirectoryVideos, db, schedulePreviewQueue]
   );
 
   const deleteVideo = useCallback(
@@ -474,8 +568,8 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    refreshLibrary();
-  }, [refreshLibrary]);
+    refreshLibrary().then(() => schedulePreviewQueue());
+  }, [refreshLibrary, schedulePreviewQueue]);
 
   const videos = useMemo(() => {
     return [...importedVideos, ...directoryVideos];

@@ -43,6 +43,7 @@ export type VideoItem = {
   channelId?: string;
   channelTitle?: string;
   source: 'mock' | 'library' | 'imported';
+  previewFrames?: string[];
 };
 
 export type ChannelItem = {
