@@ -94,9 +94,12 @@ export function VideoCard({ video, layout, onPress }: Props) {
                 : appStyles.videoCardPlaceholderList
             }
           >
-            <Text style={appStyles.videoCardPlaceholderText}>Local Video</Text>
+            <Text style={appStyles.videoCardPlaceholderText}>{video.source === 'server' ? 'Cloud Video' : 'Local Video'}</Text>
           </View>
         )}
+        <View style={[appStyles.videoSourceBadge, video.source === 'server' ? appStyles.videoSourceBadgeCloud : appStyles.videoSourceBadgeLocal]}>
+          <Text style={appStyles.videoSourceBadgeText}>{video.source === 'server' ? 'Cloud' : /^https?:/i.test(video.video) ? 'Link' : 'Local'}</Text>
+        </View>
         <View style={appStyles.videoCardDuration}>
           <Text style={appStyles.videoCardDurationText}>{video.duration}</Text>
         </View>

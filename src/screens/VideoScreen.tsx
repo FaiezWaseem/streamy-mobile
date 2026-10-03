@@ -7,6 +7,7 @@ import { Alert, Image, Pressable, SafeAreaView, ScrollView, Text, View } from 'r
 
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
+import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import {
   isVideoLiked,
   isVideoSaved,
@@ -17,6 +18,8 @@ import {
   unsaveVideo,
 } from '../utils/database';
 import { appStyles, colors } from '../utils/theme';
+import { type VideoItem } from '../utils/types';
+import { isLocalMediaUri } from '../utils/localFiles';
 
 type Props = {
   videoId: string;
@@ -29,41 +32,49 @@ function fallbackChannelId(value: string) {
 }
 
 export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
-  const db = useSQLiteContext();
-  const { videos, getVideoById, deleteVideo } = useLocalLibrary();
-  const [liked, setLiked] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const video = useMemo(() => getVideoById(videoId) ?? videos[0], [getVideoById, videoId, videos]);
-
+  const { getVideoById } = useLocalLibrary();
+  const { getVideoById: getServerVideoById } = useServerLibrary();
+  const video = getVideoById(videoId) ?? getServerVideoById(videoId);
   if (!video) {
     return (
       <SafeAreaView style={appStyles.screen}>
-        <View style={[appStyles.pageContent, { flex: 1, justifyContent: 'center' }]}>
-          <View style={appStyles.emptyState}>
-            <Text style={appStyles.emptyStateTitle}>No video available</Text>
-            <Text style={appStyles.emptyStateText}>
-              Scan a directory or import a local video first, then open it here.
-            </Text>
-          </View>
+        <View style={appStyles.pageContent}>
+          <Text style={appStyles.emptyStateTitle}>Video unavailable</Text>
+          <Text style={appStyles.emptyStateText}>Return to your library to select a video.</Text>
         </View>
       </SafeAreaView>
     );
   }
+  return <VideoContent key={video.id} videoId={videoId} video={video} onOpenVideo={onOpenVideo} onOpenChannel={onOpenChannel} />;
+}
+
+function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: VideoItem }) {
+  const db = useSQLiteContext();
+  const { videos, deleteVideo, removeLocalFileAfterSync } = useLocalLibrary();
+  const { connected, upload } = useServerLibrary();
+  const [liked, setLiked] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<number | null>(null);
 
   const relatedVideos = useMemo(
     () => videos.filter((item) => item.id !== video.id),
     [video.id, videos]
   );
-  const player = useVideoPlayer(video.video, (videoPlayer) => {
+  const playerSource = useMemo(
+    () => video.authToken ? { uri: video.video, headers: { Authorization: `Bearer ${video.authToken}` } } : video.video,
+    [video.authToken, video.video]
+  );
+  const player = useVideoPlayer(playerSource, (videoPlayer) => {
     videoPlayer.loop = false;
     videoPlayer.pause();
   });
 
   useEffect(() => {
-    player.replace(video.video);
+    player.replace(playerSource);
     player.pause();
-  }, [player, video.video]);
+  }, [player, playerSource]);
 
   useEffect(() => {
     async function syncHistory() {
@@ -170,6 +181,7 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
   }
 
   function handleDeleteVideo() {
+    if (video.source === 'server') return;
     Alert.alert(
       'Remove video',
       `Remove "${video.title}" from Streamy?`,
@@ -183,6 +195,43 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
             setActionMessage(result.message);
           },
         },
+      ]
+    );
+  }
+
+  async function syncToServer(deleteLocal: boolean) {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    setSyncProgress(0);
+    setActionMessage(null);
+    player.pause();
+    try {
+      const serverVideoId = await upload(video, (sent, total) => setSyncProgress(Math.floor((sent / total) * 100)));
+      if (!deleteLocal) {
+        setActionMessage('Synced to cloud. Your local video was kept on this device.');
+        return;
+      }
+      const removed = await removeLocalFileAfterSync(video.id);
+      if (removed) {
+        onOpenVideo(serverVideoId);
+      } else {
+        setActionMessage('Synced to cloud. The device could not delete the local file, so it was kept.');
+      }
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'Sync failed. The local file was kept.');
+    } finally {
+      setIsSyncing(false);
+      setSyncProgress(null);
+    }
+  }
+
+  function handleSyncAndFreeSpace() {
+    Alert.alert(
+      'Sync and free up space',
+      `Upload “${video.title}” to your server. After the upload succeeds, delete its local file from this device?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Upload and delete local', style: 'destructive', onPress: () => void syncToServer(true) },
       ]
     );
   }
@@ -204,6 +253,29 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
             {video.views} · {video.published}
           </Text>
 
+          {video.source !== 'server' ? (
+            <View style={appStyles.videoSyncPanel}>
+              <Text style={appStyles.videoDescriptionHeading}>Cloud sync</Text>
+              <Text style={appStyles.videoDescriptionText}>
+                {!connected ? 'Connect your server in Profile to sync this video.' : !isLocalMediaUri(video.video) ? 'Direct video links cannot be uploaded. Select a device video file to sync.' : 'Save a copy on your server, or free device storage after the upload is verified.'}
+              </Text>
+              <Pressable
+                style={[appStyles.primaryButton, (!connected || isSyncing || !isLocalMediaUri(video.video)) && appStyles.primaryButtonDisabled]}
+                disabled={!connected || isSyncing || !isLocalMediaUri(video.video)}
+                onPress={() => void syncToServer(false)}
+              >
+                <Text style={appStyles.primaryButtonText}>Sync to cloud</Text>
+              </Pressable>
+              <Pressable
+                style={appStyles.secondaryButton}
+                disabled={!connected || isSyncing || !isLocalMediaUri(video.video)}
+                onPress={handleSyncAndFreeSpace}
+              >
+                <Text style={appStyles.secondaryButtonText}>Sync & free space</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={appStyles.videoActionRow}>
             <Pressable
               style={[
@@ -219,10 +291,6 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
               />
               <Text style={appStyles.videoActionText}>{liked ? 'Liked' : 'Like'}</Text>
             </Pressable>
-            <Pressable style={appStyles.videoActionButton}>
-              <Ionicons name="download-outline" size={18} color={colors.white} />
-              <Text style={appStyles.videoActionText}>Download</Text>
-            </Pressable>
             <Pressable
               style={[
                 appStyles.videoActionButton,
@@ -237,14 +305,19 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
               />
               <Text style={appStyles.videoActionText}>{saved ? 'Saved' : 'Save'}</Text>
             </Pressable>
-            <Pressable style={appStyles.videoActionButton} onPress={handleDeleteVideo}>
+            {video.source !== 'server' ? <Pressable style={appStyles.videoActionButton} onPress={handleDeleteVideo}>
               <Ionicons name="trash-outline" size={18} color={colors.white} />
               <Text style={appStyles.videoActionText}>Remove</Text>
-            </Pressable>
+            </Pressable> : null}
           </View>
           {actionMessage ? (
             <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
               <Text style={appStyles.formStatusText}>{actionMessage}</Text>
+            </View>
+          ) : null}
+          {isSyncing ? (
+            <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
+              <Text style={appStyles.formStatusText}>{syncProgress === null ? 'Preparing upload…' : `Uploading to server: ${syncProgress}%`}</Text>
             </View>
           ) : null}
 

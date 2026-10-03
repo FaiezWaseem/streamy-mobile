@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 
 import { LocalLibraryProvider } from './src/contexts/LocalLibraryContext';
+import { ServerLibraryProvider } from './src/contexts/ServerLibraryContext';
 import { ChannelVideosScreen } from './src/screens/ChannelVideosScreen';
 import { ChannelsScreen } from './src/screens/ChannelsScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -41,9 +42,11 @@ function App() {
     <SQLiteProvider databaseName="streamy.db" onInit={migrateDbIfNeeded}>
       <NavigationContainer theme={navigationTheme}>
         <StatusBar style="light" />
-        <LocalLibraryProvider>
-          <AuthenticatedStack onLogout={() => {}} />
-        </LocalLibraryProvider>
+        <ServerLibraryProvider>
+          <LocalLibraryProvider>
+            <AuthenticatedStack onLogout={() => {}} />
+          </LocalLibraryProvider>
+        </ServerLibraryProvider>
       </NavigationContainer>
     </SQLiteProvider>
   );

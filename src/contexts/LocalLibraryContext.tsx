@@ -29,6 +29,7 @@ import {
   type ScannedDirectoryRow,
 } from '../utils/database';
 import { mapWithConcurrency } from '../utils/concurrency';
+import { deleteLocalMediaFile, isLocalMediaUri } from '../utils/localFiles';
 import {
   extractDurationInfoFromUri,
   generateBestThumbnail,
@@ -72,6 +73,7 @@ type LocalLibraryContextValue = {
     onProgress?: (progress: DirectoryImportProgress) => void
   ) => Promise<{ imported: number; title: string }>;
   deleteVideo: (videoId: string) => Promise<{ removed: boolean; message: string }>;
+  removeLocalFileAfterSync: (videoId: string) => Promise<boolean>;
   deleteChannel: (channelId: string) => Promise<{ removed: boolean; message: string }>;
   getChannelVideos: (channelId: string) => VideoItem[];
   getVideoById: (videoId: string) => VideoItem | undefined;
@@ -567,6 +569,25 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
     [db, refreshLibrary]
   );
 
+  const removeLocalFileAfterSync = useCallback(async (videoId: string) => {
+    const target = [...importedVideos, ...directoryVideos].find((video) => video.id === videoId);
+    if (!target || !isLocalMediaUri(target.video)) return false;
+
+    try {
+      if (!(await deleteLocalMediaFile(target.video))) return false;
+      if (importedVideos.some((video) => video.id === videoId)) {
+        await deleteImportedVideo(db, videoId);
+      } else {
+        await db.runAsync('DELETE FROM directory_videos WHERE video_id = ?', videoId);
+      }
+      await refreshLibrary();
+      return true;
+    } catch (error) {
+      console.log('[library] uploaded video local cleanup failed', { videoId, error });
+      return false;
+    }
+  }, [db, directoryVideos, importedVideos, refreshLibrary]);
+
   useEffect(() => {
     refreshLibrary().then(() => schedulePreviewQueue());
   }, [refreshLibrary, schedulePreviewQueue]);
@@ -598,6 +619,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       pickDirectory,
       importPickedDirectory,
       deleteVideo,
+      removeLocalFileAfterSync,
       deleteChannel,
       getChannelVideos,
       getVideoById,
@@ -612,6 +634,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       pickDirectory,
       importPickedDirectory,
       deleteVideo,
+      removeLocalFileAfterSync,
       deleteChannel,
       getChannelVideos,
       getVideoById,

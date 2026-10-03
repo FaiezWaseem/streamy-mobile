@@ -756,6 +756,25 @@ export const appStyles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
+  videoSourceBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  videoSourceBadgeLocal: {
+    backgroundColor: 'rgba(8, 94, 104, 0.95)',
+  },
+  videoSourceBadgeCloud: {
+    backgroundColor: 'rgba(89, 49, 156, 0.95)',
+  },
+  videoSourceBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   videoCardDurationText: {
     color: colors.white,
     fontSize: 11,
@@ -838,6 +857,15 @@ export const appStyles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  videoSyncPanel: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+    marginBottom: 16,
   },
   videoActionButton: {
     flexDirection: 'row',

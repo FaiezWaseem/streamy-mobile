@@ -42,7 +42,8 @@ export type VideoItem = {
   published: string;
   channelId?: string;
   channelTitle?: string;
-  source: 'mock' | 'library' | 'imported';
+  source: 'mock' | 'library' | 'imported' | 'server';
+  authToken?: string;
   previewFrames?: string[];
 };
 
