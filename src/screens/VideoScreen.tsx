@@ -1,14 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
+import { useSync } from '../contexts/SyncContext';
 import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import {
+  getInterestHistory,
+  recordInterestEvent,
   isVideoLiked,
   isVideoSaved,
   likeVideo,
@@ -19,6 +22,7 @@ import {
 } from '../utils/database';
 import { appStyles, colors } from '../utils/theme';
 import { type VideoItem } from '../utils/types';
+import { normalizeTags, rankVideos, newWatchId, type InterestWatch } from '../utils/recommendations';
 import { isLocalMediaUri } from '../utils/localFiles';
 
 type Props = {
@@ -50,8 +54,21 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
 
 function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: VideoItem }) {
   const db = useSQLiteContext();
-  const { videos, deleteVideo, removeLocalFileAfterSync } = useLocalLibrary();
-  const { connected, upload } = useServerLibrary();
+  const { videos, deleteVideo, removeLocalFileAfterSync, updateTags: updateLocalTags } = useLocalLibrary();
+  const server = useServerLibrary();
+  const { connected } = server;
+  const { upload } = useSync();
+  const [tagError, setTagError] = useState<string | null>(null);
+  const [editingTags, setEditingTags] = useState(false);
+  const isFocused = useIsFocused();
+  const focusedRef = useRef(isFocused);
+  focusedRef.current = isFocused;
+  const mountedRef = useRef(true);
+  const [tagDraft, setTagDraft] = useState((video.tags ?? []).join(', '));
+  const [savingTags, setSavingTags] = useState(false);
+  const [interestHistory, setInterestHistory] = useState<InterestWatch[]>([]);
+  const videoRef = useRef(video);
+  videoRef.current = video;
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -59,8 +76,8 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
   const [syncProgress, setSyncProgress] = useState<number | null>(null);
 
   const relatedVideos = useMemo(
-    () => videos.filter((item) => item.id !== video.id),
-    [video.id, videos]
+    () => rankVideos([...videos, ...server.videos], [...server.history, ...interestHistory], video).slice(0, 12),
+    [video, videos, server.videos, server.history, interestHistory]
   );
   const playerSource = useMemo(
     () => video.authToken ? { uri: video.video, headers: { Authorization: `Bearer ${video.authToken}` } } : video.video,
@@ -71,28 +88,76 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
     videoPlayer.pause();
   });
 
+  // useVideoPlayer owns native creation and release. Never access it in unmount cleanup.
   useEffect(() => {
-    player.replace(playerSource);
-    player.pause();
-  }, [player, playerSource]);
+    if (!isFocused) player.pause();
+  }, [isFocused, player]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     async function syncHistory() {
       await recordVideoView(db, video);
+      const history = await getInterestHistory(db, server.accountKey);
+      if (mountedRef.current) setInterestHistory(history);
     }
 
-    syncHistory();
-  }, [db, video]);
+    void syncHistory().catch(() => undefined);
+  }, [db, video.id, server.accountKey]);
+
+  useEffect(() => { setTagDraft((video.tags ?? []).join(', ')); }, [video.tags]);
+  useEffect(() => {
+    player.timeUpdateEventInterval = 1;
+    let lastTime = player.currentTime, seconds = 0, recorded = false;
+    const eventId = newWatchId();
+    let active = true;
+    const subscription = player.addListener('timeUpdate', ({ currentTime }) => {
+      if (!active || !focusedRef.current) return;
+      const delta = currentTime - lastTime;
+      lastTime = currentTime;
+      if (recorded || !player.playing || delta <= 0 || delta > 2) return;
+      seconds += delta;
+      const duration = player.duration;
+      const threshold = duration > 0 ? Math.min(10, Math.max(1, duration * 0.2)) : 10;
+      if (seconds < threshold) return;
+      recorded = true;
+      const current = videoRef.current;
+      const event: InterestWatch = { event_id: eventId, video_id: current.id, watched_at: new Date().toISOString(), tags: current.tags ?? [], duration };
+      const save = current.source === 'server' ? server.recordWatch(event, seconds) : recordInterestEvent(db, event, seconds);
+      void save.then(() => { if (mountedRef.current) setInterestHistory(history => [event, ...history]); }).catch(() => undefined);
+    });
+    return () => {
+      active = false;
+      // Expo may already have released the shared object during unmount.
+      try { subscription.remove(); } catch { /* Its listeners are already disposed. */ }
+    };
+  }, [db, player, video.id, server.recordWatch]);
+
+  async function handleSaveTags() {
+    setTagError(null);
+    setSavingTags(true);
+    try {
+      const tags = normalizeTags(tagDraft);
+      if (video.source === 'server') await server.updateTags(video.id, tags);
+      else await updateLocalTags(video.id, tags);
+      if (!mountedRef.current) return;
+      setTagDraft(tags.join(', ')); setEditingTags(false); setActionMessage('Tags saved.');
+    } catch (error) { if (mountedRef.current) setTagError(error instanceof Error ? error.message : 'Could not save tags.'); }
+    finally { if (mountedRef.current) setSavingTags(false); }
+  }
 
   useFocusEffect(
     useCallback(() => {
+      let active = true;
       async function syncTrackedState() {
-        setLiked(await isVideoLiked(db, video.id));
-        setSaved(await isVideoSaved(db, video.id));
-        setActionMessage(null);
+        const [nextLiked, nextSaved] = await Promise.all([isVideoLiked(db, video.id), isVideoSaved(db, video.id)]);
+        if (!active) return;
+        setLiked(nextLiked); setSaved(nextSaved); setActionMessage(null);
       }
-
-      syncTrackedState();
+      void syncTrackedState().catch(() => undefined);
+      return () => { active = false; };
     }, [db, video.id])
   );
 
@@ -238,6 +303,22 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
 
   return (
     <SafeAreaView style={appStyles.screen}>
+      <Modal visible={editingTags} transparent animationType="fade" onRequestClose={() => setEditingTags(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.75)' }}>
+          <View style={{ width: '100%', maxWidth: 480, backgroundColor: colors.surface, borderRadius: 18, padding: 20, gap: 16 }}>
+            <Text style={appStyles.videoDescriptionHeading}>Edit tags</Text>
+            <TextInput value={tagDraft} onChangeText={setTagDraft} autoFocus editable={!savingTags} placeholder="funny, thriller, english" placeholderTextColor={colors.textMuted} style={appStyles.searchInput} />
+            <Text style={appStyles.videoDescriptionText}>Separate tags with commas. Up to 20 tags.</Text>
+            {tagError ? <Text style={{ color: colors.accent }}>{tagError}</Text> : null}
+            <Pressable style={appStyles.primaryButton} disabled={savingTags} onPress={() => void handleSaveTags()}>
+              <Text style={appStyles.primaryButtonText}>{savingTags ? 'Saving…' : 'Save tags'}</Text>
+            </Pressable>
+            <Pressable style={appStyles.secondaryButton} disabled={savingTags} onPress={() => setEditingTags(false)}>
+              <Text style={appStyles.secondaryButtonText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
       <ScrollView showsVerticalScrollIndicator={false}>
         <VideoView
           player={player}
@@ -252,6 +333,16 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
           <Text style={appStyles.videoPageMeta}>
             {video.views} · {video.published}
           </Text>
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            {(video.tags ?? []).map(tag => <Text key={tag} style={{ color: colors.text, backgroundColor: colors.surface, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>{tag}</Text>)}
+            {video.canEdit || video.source !== 'server' ? (
+              <Pressable accessibilityRole="button" onPress={() => { setTagError(null); setTagDraft((video.tags ?? []).join(', ')); setEditingTags(true); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8 }}>
+                <Ionicons name="pencil-outline" size={16} color={colors.textMuted} />
+                <Text style={{ color: colors.textMuted }}>Edit tags</Text>
+              </Pressable>
+            ) : null}
+          </View>
 
           {video.source !== 'server' ? (
             <View style={appStyles.videoSyncPanel}>
@@ -347,7 +438,7 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
             <Text style={appStyles.videoDescriptionText}>{video.description}</Text>
           </View>
 
-          <Text style={appStyles.sectionTitle}>Up next</Text>
+          <Text style={appStyles.sectionTitle}>Similar videos</Text>
           <View style={appStyles.searchResultsList}>
             {relatedVideos.map((item) => (
               <VideoCard

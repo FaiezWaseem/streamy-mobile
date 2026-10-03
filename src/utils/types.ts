@@ -4,6 +4,7 @@ export type RootStackParamList = {
   MainTabs: undefined;
   Search: undefined;
   Saved: undefined;
+  Sync: { channelId?: string } | undefined;
   Video: { videoId: string };
   ChannelVideos: { channelId: string; title: string };
 };
@@ -24,6 +25,7 @@ export type AuthScreenProps = {
 export type MainTabsProps = {
   onLogout: () => void;
   onOpenSearch: () => void;
+  onOpenSync: (channelId?: string) => void;
   onOpenSaved: () => void;
   onOpenVideo: (videoId: string) => void;
   onOpenChannel: (channelId: string, title: string) => void;
@@ -45,6 +47,9 @@ export type VideoItem = {
   source: 'mock' | 'library' | 'imported' | 'server';
   authToken?: string;
   previewFrames?: string[];
+  previewGif?: string;
+  tags?: string[];
+  canEdit?: boolean;
 };
 
 export type ChannelItem = {

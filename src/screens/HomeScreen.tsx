@@ -11,25 +11,29 @@ import {
   type DirectorySelection,
 } from '../contexts/LocalLibraryContext';
 import { useServerLibrary } from '../contexts/ServerLibraryContext';
-import { getRecentVideos, type RecentVideoRow } from '../utils/database';
+import { getInterestHistory, getRecentVideos, type RecentVideoRow } from '../utils/database';
+import { rankVideos, type InterestWatch } from '../utils/recommendations';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
+  onOpenSync: () => void;
   onOpenSearch: () => void;
   onOpenVideo: (videoId: string) => void;
 };
 
-export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
+export function HomeScreen({ onOpenSync, onOpenSearch, onOpenVideo }: Props) {
   const db = useSQLiteContext();
   const [layout, setLayout] = useState<'grid' | 'list'>('list');
   const [pendingDirectory, setPendingDirectory] = useState<DirectorySelection | null>(null);
   const [importProgress, setImportProgress] = useState<DirectoryImportProgress | null>(null);
   const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
+  const [interestHistory, setInterestHistory] = useState<InterestWatch[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const { videos: localVideos, getVideoById: getLocalVideoById, pickDirectory, importPickedDirectory, isLoading } =
     useLocalLibrary();
   const server = useServerLibrary();
   const videos = useMemo(() => [...localVideos, ...server.videos], [localVideos, server.videos]);
+  const recommendations = useMemo(() => rankVideos(videos, [...server.history, ...interestHistory]).slice(0, 12), [videos, server.history, interestHistory]);
   const getVideoById = (id: string) => getLocalVideoById(id) ?? server.getVideoById(id);
 
   useFocusEffect(
@@ -37,10 +41,11 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
       async function loadRecentVideos() {
         const rows = await getRecentVideos(db, 3);
         setRecentVideos(rows);
+        setInterestHistory(await getInterestHistory(db, server.accountKey));
       }
 
       loadRecentVideos();
-    }, [db])
+    }, [db, server.accountKey])
   );
 
   useFocusEffect(
@@ -105,6 +110,9 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
           <Text style={appStyles.pageTitle}>Home</Text>
           <Pressable style={appStyles.iconButton} onPress={onOpenSearch}>
             <Ionicons name="search" size={24} color={colors.text} />
+          </Pressable>
+          <Pressable style={appStyles.iconButton} onPress={onOpenSync} accessibilityLabel="Sync videos">
+            <Ionicons name="cloud-upload-outline" size={24} color={colors.text} />
           </Pressable>
           {/* <Pressable style={appStyles.softButton}>
             <Text style={appStyles.softButtonText}>Upload</Text>
@@ -246,6 +254,11 @@ export function HomeScreen({ onOpenSearch, onOpenVideo }: Props) {
                 </Text>
               </View>
             )}
+
+            <Text style={appStyles.sectionTitle}>Recommended for you</Text>
+            <View style={layout === 'grid' ? appStyles.searchResultsGrid : appStyles.searchResultsList}>
+              {recommendations.map(video => <VideoCard key={video.id} video={video} layout={layout === 'list' ? 'home' : 'grid'} onPress={onOpenVideo} />)}
+            </View>
 
             <Text style={appStyles.sectionTitle}>Your videos</Text>
             <View

@@ -29,6 +29,10 @@ export function VideoCard({ video, layout, onPress }: Props) {
   }, []);
 
   function startPreview() {
+    if (video.previewGif) {
+      setIsPreviewing(true);
+      return;
+    }
     if (!frames || frames.length < 2) {
       return;
     }
@@ -48,7 +52,9 @@ export function VideoCard({ video, layout, onPress }: Props) {
     setIsPreviewing(false);
   }
 
-  const displayImage = isPreviewing && frames ? frames[frameIndex] : video.image;
+  const displayImage = isPreviewing
+    ? video.previewGif ?? (frames ? frames[frameIndex] : video.image)
+    : video.image;
 
   return (
     <Pressable
@@ -75,7 +81,9 @@ export function VideoCard({ video, layout, onPress }: Props) {
       >
         {displayImage ? (
           <Image
+            key={isPreviewing && video.previewGif ? 'gif-preview' : 'thumbnail'}
             source={{ uri: displayImage }}
+            onError={() => { if (isPreviewing) stopPreview(); }}
             style={
               isGrid
                 ? appStyles.videoCardGridImage

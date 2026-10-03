@@ -1,18 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Alert, Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
+import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
+  onOpenSync: (channelId?: string) => void;
   onOpenChannel: (channelId: string, title: string) => void;
 };
 
-export function ChannelsScreen({ onOpenChannel }: Props) {
+export function ChannelsScreen({ onOpenChannel, onOpenSync }: Props) {
   const [query, setQuery] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const { channels, rescanScannedDirectories, isLoading, deleteChannel } = useLocalLibrary();
+  const { channels: localChannels, rescanScannedDirectories, isLoading, deleteChannel } = useLocalLibrary();
+  const server = useServerLibrary();
+  const channels = useMemo(() => [
+    ...localChannels.map((channel) => ({ ...channel, source: 'local' })),
+    ...server.channels.map((channel) => ({ ...channel, source: 'cloud' })),
+  ], [localChannels, server.channels]);
+  useFocusEffect(useCallback(() => {
+    if (server.connected) void server.refresh().catch(() => undefined);
+  }, [server.connected, server.refresh]));
 
   const filteredChannels = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -86,6 +97,11 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
           </View>
         ) : null}
 
+        {server.isLoading || server.error ? (
+          <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
+            <Text style={appStyles.formStatusText}>{server.error ?? 'Refreshing cloud channels…'}</Text>
+          </View>
+        ) : null}
         {filteredChannels.map((channel) => (
           <View key={channel.id} style={appStyles.channelListCard}>
             <Pressable
@@ -93,25 +109,26 @@ export function ChannelsScreen({ onOpenChannel }: Props) {
               onPress={() => onOpenChannel(channel.id, channel.title)}
             >
               <View style={appStyles.channelListIcon}>
-                <Ionicons name="folder-open-outline" size={24} color={colors.white} />
+                <Ionicons name={channel.source === 'cloud' ? 'cloud-outline' : 'folder-open-outline'} size={24} color={colors.white} />
               </View>
               <View style={appStyles.channelListBody}>
                 <Text style={appStyles.channelListTitle}>{channel.title}</Text>
-                <Text style={appStyles.channelListMeta}>{channel.videos} videos</Text>
+                <Text style={appStyles.channelListMeta}>{channel.videos} videos · {channel.source === 'cloud' ? 'Cloud' : 'Local'}</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
             </Pressable>
-            <Pressable
+            {channel.source === 'local' && channel.id.startsWith('directory-') ? <Pressable style={appStyles.secondaryButton} onPress={() => onOpenSync(channel.id)}><Text style={appStyles.secondaryButtonText}>Sync directory</Text></Pressable> : null}
+            {channel.source === 'local' ? <Pressable
               style={appStyles.channelDeleteButton}
               onPress={() => handleDeleteChannel(channel.id, channel.title)}
             >
               <Ionicons name="trash-outline" size={18} color={colors.white} />
               <Text style={appStyles.channelDeleteButtonText}>Remove</Text>
-            </Pressable>
+            </Pressable> : null}
           </View>
         ))}
 
-        {!filteredChannels.length ? (
+        {!filteredChannels.length && !server.isLoading ? (
           <View style={appStyles.emptyState}>
             <Text style={appStyles.emptyStateTitle}>No channels found</Text>
             <Text style={appStyles.emptyStateText}>

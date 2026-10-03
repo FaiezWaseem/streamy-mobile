@@ -10,6 +10,8 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 
 import { LocalLibraryProvider } from './src/contexts/LocalLibraryContext';
+import { SyncProvider } from './src/contexts/SyncContext';
+import { SyncScreen } from './src/screens/SyncScreen';
 import { ServerLibraryProvider } from './src/contexts/ServerLibraryContext';
 import { ChannelVideosScreen } from './src/screens/ChannelVideosScreen';
 import { ChannelsScreen } from './src/screens/ChannelsScreen';
@@ -44,7 +46,7 @@ function App() {
         <StatusBar style="light" />
         <ServerLibraryProvider>
           <LocalLibraryProvider>
-            <AuthenticatedStack onLogout={() => {}} />
+            <SyncProvider><AuthenticatedStack onLogout={() => {}} /></SyncProvider>
           </LocalLibraryProvider>
         </ServerLibraryProvider>
       </NavigationContainer>
@@ -61,12 +63,16 @@ function AuthenticatedStack({ onLogout }: { onLogout: () => void }) {
             onLogout={onLogout}
             onOpenSearch={() => navigation.navigate('Search')}
             onOpenSaved={() => navigation.navigate('Saved')}
+            onOpenSync={(channelId) => navigation.navigate('Sync', { channelId })}
             onOpenVideo={(videoId) => navigation.navigate('Video', { videoId })}
             onOpenChannel={(channelId, title) =>
               navigation.navigate('ChannelVideos', { channelId, title })
             }
           />
         )}
+      </AuthenticatedNav.Screen>
+      <AuthenticatedNav.Screen name="Sync" options={{ headerShown: true, title: 'Sync' }}>
+        {({ route, navigation }) => <SyncScreen channelId={route.params?.channelId} onOpenVideo={videoId => navigation.navigate('Video', { videoId })} />}
       </AuthenticatedNav.Screen>
       <AuthenticatedNav.Screen name="Search" options={{ headerShown: true, title: 'Search' }}>
         {({ navigation }) => (
@@ -108,6 +114,7 @@ function MainTabs({
   onLogout,
   onOpenSearch,
   onOpenSaved,
+  onOpenSync,
   onOpenVideo,
   onOpenChannel,
 }: MainTabsProps) {
@@ -156,10 +163,10 @@ function MainTabs({
       })}
     >
       <Tab.Screen name="Home" options={{ headerShown: false }}>
-        {() => <HomeScreen onOpenSearch={onOpenSearch} onOpenVideo={onOpenVideo} />}
+        {() => <HomeScreen onOpenSync={onOpenSync} onOpenSearch={onOpenSearch} onOpenVideo={onOpenVideo} />}
       </Tab.Screen>
       <Tab.Screen name="Channels" options={{ headerShown: false }}>
-        {() => <ChannelsScreen onOpenChannel={onOpenChannel} />}
+        {() => <ChannelsScreen onOpenSync={onOpenSync} onOpenChannel={onOpenChannel} />}
       </Tab.Screen>
       <Tab.Screen
         name="Upload"
@@ -172,6 +179,7 @@ function MainTabs({
       <Tab.Screen name="Profile" options={{ headerShown: false }}>
         {() => (
           <ProfileScreen
+            onOpenSync={onOpenSync}
             onOpenSaved={onOpenSaved}
             onOpenVideo={onOpenVideo}
             onLogout={onLogout}

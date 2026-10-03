@@ -12,12 +12,13 @@ import { getRecentVideos, type RecentVideoRow } from '../utils/database';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
+  onOpenSync: () => void;
   onOpenSaved: () => void;
   onOpenVideo: (videoId: string) => void;
   onLogout: () => void;
 };
 
-export function ProfileScreen({ onOpenSaved, onOpenVideo, onLogout }: Props) {
+export function ProfileScreen({ onOpenSync, onOpenSaved, onOpenVideo, onLogout }: Props) {
   const db = useSQLiteContext();
   const { videos, getVideoById } = useLocalLibrary();
   const server = useServerLibrary();
@@ -62,6 +63,7 @@ export function ProfileScreen({ onOpenSaved, onOpenVideo, onLogout }: Props) {
           <Text style={appStyles.profileHandle}>@streamy</Text>
         </View>
 
+        <Pressable style={appStyles.primaryButton} onPress={onOpenSync}><Text style={appStyles.primaryButtonText}>Sync videos & directories</Text></Pressable>
         <View style={appStyles.statsRow}>
           <StatCard value={String(videos.length)} label="Videos" />
           <StatCard value={String(viewsCount)} label="Views" />

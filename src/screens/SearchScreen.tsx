@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   Pressable,
   SafeAreaView,
@@ -11,6 +12,7 @@ import {
 
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
+import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import { appStyles, colors } from '../utils/theme';
 
 type Props = {
@@ -19,7 +21,12 @@ type Props = {
 
 export function SearchScreen({ onOpenVideo }: Props) {
   const [layout, setLayout] = useState<'grid' | 'list'>('grid');
-  const { videos } = useLocalLibrary();
+  const { videos: localVideos } = useLocalLibrary();
+  const server = useServerLibrary();
+  const videos = useMemo(() => [...localVideos, ...server.videos], [localVideos, server.videos]);
+  useFocusEffect(useCallback(() => {
+    if (server.connected) void server.refresh().catch(() => undefined);
+  }, [server.connected, server.refresh]));
   const [query, setQuery] = useState('');
   const results = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -29,7 +36,7 @@ export function SearchScreen({ onOpenVideo }: Props) {
     }
 
     return videos.filter((video) =>
-      [video.title, video.creator, video.channelTitle]
+      [video.title, video.creator, video.channelTitle, video.description, ...(video.tags ?? [])]
         .filter(Boolean)
         .some((value) => value?.toLowerCase().includes(search))
     );
@@ -42,7 +49,7 @@ export function SearchScreen({ onOpenVideo }: Props) {
           value={query}
           onChangeText={setQuery}
           style={appStyles.searchInput}
-          placeholder="Search clips, channels, templates"
+          placeholder="Search local and cloud videos"
           placeholderTextColor={colors.textMuted}
         />
         <View style={appStyles.toggleRow}>
@@ -68,6 +75,11 @@ export function SearchScreen({ onOpenVideo }: Props) {
           </Pressable>
         </View>
         <Text style={appStyles.sectionTitle}>Videos</Text>
+        {server.isLoading || server.error ? (
+          <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
+            <Text style={appStyles.formStatusText}>{server.error ?? 'Refreshing cloud videos…'}</Text>
+          </View>
+        ) : null}
         {results.length ? (
           <View
             style={
@@ -83,14 +95,14 @@ export function SearchScreen({ onOpenVideo }: Props) {
               />
             ))}
           </View>
-        ) : (
+        ) : !server.isLoading ? (
           <View style={appStyles.emptyState}>
             <Text style={appStyles.emptyStateTitle}>No matching videos</Text>
             <Text style={appStyles.emptyStateText}>
-              Scan a directory or import a local file to start building your search library.
+              Try another keyword, scan a local folder, or connect your server in Profile.
             </Text>
           </View>
-        )}
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
