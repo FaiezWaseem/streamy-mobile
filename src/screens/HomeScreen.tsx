@@ -5,11 +5,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
-import {
-  useLocalLibrary,
-  type DirectoryImportProgress,
-  type DirectorySelection,
-} from '../contexts/LocalLibraryContext';
+import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import { getInterestHistory, getRecentVideos, type RecentVideoRow } from '../utils/database';
 import { rankVideos, type InterestWatch } from '../utils/recommendations';
@@ -17,18 +13,16 @@ import { appStyles, colors } from '../utils/theme';
 
 type Props = {
   onOpenSync: () => void;
+  onOpenDirectoryScan: () => void;
   onOpenSearch: () => void;
   onOpenVideo: (videoId: string) => void;
 };
 
-export function HomeScreen({ onOpenSync, onOpenSearch, onOpenVideo }: Props) {
+export function HomeScreen({ onOpenSync, onOpenDirectoryScan, onOpenSearch, onOpenVideo }: Props) {
   const db = useSQLiteContext();
   const [layout, setLayout] = useState<'grid' | 'list'>('list');
-  const [pendingDirectory, setPendingDirectory] = useState<DirectorySelection | null>(null);
-  const [importProgress, setImportProgress] = useState<DirectoryImportProgress | null>(null);
   const [recentVideos, setRecentVideos] = useState<RecentVideoRow[]>([]);
   const [interestHistory, setInterestHistory] = useState<InterestWatch[]>([]);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const { videos: localVideos, getVideoById: getLocalVideoById, pickDirectory, importPickedDirectory, isLoading } =
     useLocalLibrary();
   const server = useServerLibrary();
@@ -54,52 +48,6 @@ export function HomeScreen({ onOpenSync, onOpenSearch, onOpenVideo }: Props) {
     }, [server.connected, server.refresh])
   );
 
-  async function handlePickDirectory() {
-    setStatusMessage(null);
-    setImportProgress(null);
-
-    try {
-      const selection = await pickDirectory();
-
-      if (!selection) {
-        return;
-      }
-
-      setPendingDirectory(selection);
-    } catch (error) {
-      console.log('[home] failed to pick directory', { error });
-      setStatusMessage('Could not open the folder picker right now.');
-    }
-  }
-
-  async function handleConfirmDirectoryImport() {
-    if (!pendingDirectory) {
-      return;
-    }
-
-    setStatusMessage(null);
-    setImportProgress({
-      imported: 0,
-      total: pendingDirectory.totalVideos,
-      currentFileName: '',
-    });
-
-    try {
-      const result = await importPickedDirectory(pendingDirectory, (progress) => {
-        setImportProgress(progress);
-      });
-      setStatusMessage(
-        `Imported ${result.imported} videos from "${result.title}" successfully.`
-      );
-      setPendingDirectory(null);
-    } catch (error) {
-      console.log('[home] failed to import directory', { error });
-      setStatusMessage('Directory import failed before finishing. Please try again.');
-    } finally {
-      setImportProgress(null);
-    }
-  }
-
   return (
     <SafeAreaView style={appStyles.screen}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={appStyles.pageContent}>
@@ -117,72 +65,14 @@ export function HomeScreen({ onOpenSync, onOpenSearch, onOpenVideo }: Props) {
           {/* <Pressable style={appStyles.softButton}>
             <Text style={appStyles.softButtonText}>Upload</Text>
           </Pressable> */}
-          <Pressable style={appStyles.scanButton} onPress={handlePickDirectory} disabled={isLoading}>
-            <Text style={appStyles.scanButtonText}>
-              {isLoading ? 'Loading...' : 'Scan Directory'}
-            </Text>
+          <Pressable style={appStyles.iconButton} onPress={onOpenDirectoryScan} accessibilityLabel="Scan directory">
+            <Ionicons name="folder-open-outline" size={24} color={colors.text} />
           </Pressable>
         </View>
 
         {server.error ? (
           <View style={[appStyles.formStatus, appStyles.formStatusError]}>
             <Text style={appStyles.formStatusText}>{server.error}</Text>
-          </View>
-        ) : null}
-
-        {pendingDirectory ? (
-          <View style={appStyles.directoryReviewCard}>
-            <Text style={appStyles.sectionTitle}>Confirm Folder Import</Text>
-            <Text style={appStyles.sectionMeta}>
-              Review the selected folder before Streamy starts importing video metadata.
-            </Text>
-            <View style={appStyles.directoryReviewRow}>
-              <Text style={appStyles.directoryReviewLabel}>Folder</Text>
-              <Text style={appStyles.directoryReviewValue}>{pendingDirectory.title}</Text>
-            </View>
-            <View style={appStyles.directoryReviewRow}>
-              <Text style={appStyles.directoryReviewLabel}>Total Videos</Text>
-              <Text style={appStyles.directoryReviewValue}>{pendingDirectory.totalVideos}</Text>
-            </View>
-            <View style={appStyles.directoryReviewRow}>
-              <Text style={appStyles.directoryReviewLabel}>Full Path</Text>
-              <Text style={appStyles.directoryReviewPath}>{pendingDirectory.directoryUri}</Text>
-            </View>
-            <View style={appStyles.directoryReviewActions}>
-              <Pressable
-                style={appStyles.secondaryButton}
-                onPress={() => {
-                  setPendingDirectory(null);
-                  setImportProgress(null);
-                }}
-              >
-                <Text style={appStyles.secondaryButtonText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={appStyles.primaryButton}
-                onPress={handleConfirmDirectoryImport}
-                disabled={isLoading}
-              >
-                <Text style={appStyles.primaryButtonText}>Confirm Import</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
-
-        {importProgress ? (
-          <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
-            <Text style={appStyles.formStatusText}>
-              {importProgress.imported}/{importProgress.total} imported
-            </Text>
-            {importProgress.currentFileName ? (
-              <Text style={appStyles.directoryProgressFile}>{importProgress.currentFileName}</Text>
-            ) : null}
-          </View>
-        ) : null}
-
-        {statusMessage ? (
-          <View style={[appStyles.formStatus, appStyles.formStatusInfo]}>
-            <Text style={appStyles.formStatusText}>{statusMessage}</Text>
           </View>
         ) : null}
 

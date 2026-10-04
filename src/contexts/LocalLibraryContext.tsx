@@ -14,6 +14,8 @@ import { InteractionManager } from 'react-native';
 
 import {
   getLocalVideoTags,
+  getLocalVideoActors,
+  setLocalVideoActors,
   setVideoTags,
   deleteImportedVideo,
   deleteImportedVideosByChannel,
@@ -77,6 +79,7 @@ type LocalLibraryContextValue = {
   ) => Promise<{ imported: number; title: string }>;
   deleteVideo: (videoId: string) => Promise<{ removed: boolean; message: string }>;
   updateTags: (videoId: string, tags: string[]) => Promise<void>;
+  updateActors: (videoId: string, actors: import('../utils/types').ActorItem[]) => Promise<void>;
   removeLocalFileAfterSync: (videoId: string) => Promise<boolean>;
   deleteChannel: (channelId: string) => Promise<{ removed: boolean; message: string }>;
   getChannelVideos: (channelId: string) => VideoItem[];
@@ -193,6 +196,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
   const [importedVideos, setImportedVideos] = useState<VideoItem[]>([]);
   const [directoryVideos, setDirectoryVideos] = useState<VideoItem[]>([]);
   const [tagsById, setTagsById] = useState<Record<string, string[]>>({});
+  const [actorsById, setActorsById] = useState<Record<string, import('../utils/types').ActorItem[]>>({});
 
   const loadImported = useCallback(async () => {
     const rows = await getImportedVideos(db);
@@ -427,7 +431,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
 
     try {
       console.log('[library] refreshing cached local sources');
-      await Promise.all([loadImported(), loadDirectoryVideoCache(), getLocalVideoTags(db).then(setTagsById)]);
+      await Promise.all([loadImported(), loadDirectoryVideoCache(), getLocalVideoTags(db).then(setTagsById), getLocalVideoActors(db).then(setActorsById)]);
     } finally {
       setIsLoading(false);
     }
@@ -598,8 +602,8 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
   }, [refreshLibrary, schedulePreviewQueue]);
 
   const videos = useMemo(() => {
-    return [...importedVideos, ...directoryVideos].map(video => ({ ...video, tags: tagsById[video.id] ?? [], canEdit: true }));
-  }, [directoryVideos, importedVideos, tagsById]);
+    return [...importedVideos, ...directoryVideos].map(video => ({ ...video, tags: tagsById[video.id] ?? [], actors: actorsById[video.id] ?? [], canEdit: true }));
+  }, [directoryVideos, importedVideos, tagsById, actorsById]);
 
   const channels = useMemo(() => mapVideosToChannels(videos), [videos]);
 
@@ -618,6 +622,10 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
     await setVideoTags(db, videoId, normalized);
     setTagsById(current => ({ ...current, [videoId]: normalized }));
   }, [db]);
+  const updateActors = useCallback(async (videoId: string, actors: import('../utils/types').ActorItem[]) => {
+    await setLocalVideoActors(db,videoId,actors);
+    setActorsById(current=>({...current,[videoId]:actors}));
+  },[db]);
 
   const value = useMemo(
     () => ({
@@ -632,6 +640,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       deleteVideo,
       removeLocalFileAfterSync,
       updateTags,
+      updateActors,
       deleteChannel,
       getChannelVideos,
       getVideoById,
@@ -648,6 +657,7 @@ export function LocalLibraryProvider({ children }: { children: ReactNode }) {
       deleteVideo,
       removeLocalFileAfterSync,
       updateTags,
+      updateActors,
       deleteChannel,
       getChannelVideos,
       getVideoById,

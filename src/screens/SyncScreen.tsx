@@ -1,5 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { Alert, FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import { useServerLibrary } from '../contexts/ServerLibraryContext';
@@ -12,13 +13,14 @@ export function SyncScreen({ channelId, onOpenVideo }: { channelId?: string; onO
   const sync = useSync();
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [foldersVisible, setFoldersVisible] = useState(Boolean(channelId));
   useFocusEffect(useCallback(() => { if (server.connected) void server.refresh().catch(() => undefined); }, [server.connected, server.refresh]));
   const folders = local.channels.filter(channel => channel.id.startsWith('directory-')).sort((a, b) => Number(b.id === channelId) - Number(a.id === channelId));
   const knownIds = new Set(sync.jobs.filter(job => job.status === 'synced').map(job => job.serverId));
   const otherCloud = server.videos.filter(video => !knownIds.has(video.id));
   const completed = sync.jobs.filter(job => job.status === 'synced').length;
   const pending = sync.jobs.filter(job => job.status === 'queued' || job.status === 'uploading').length;
+  const queued = sync.jobs.filter(job => job.status === 'queued').length;
+  const paused = sync.jobs.filter(job => job.status === 'paused').length;
   async function queueFolder(id: string) {
     setAdding(true);
     try {
@@ -35,23 +37,25 @@ export function SyncScreen({ channelId, onOpenVideo }: { channelId?: string; onO
   }
   const header = <View style={styles.header}>
     <Text style={appStyles.sectionTitle}>Sync videos</Text>
-    <Text style={appStyles.sectionMeta}>{completed} synced · {pending} queued or uploading</Text>
+    <Text style={appStyles.sectionMeta}>{completed} synced · {pending} queued or uploading · {paused} paused · up to 2 simultaneous uploads</Text>
     <Text style={styles.note}>Uploads continue as you move between screens. Keep the app open while syncing. Interrupted uploads can be retried.</Text>
     {!server.connected ? <Text style={styles.note}>Connect your server in Profile to start syncing.</Text> : null}
     {message || sync.storageError ? <Text style={styles.note}>{sync.storageError ?? message}</Text> : null}
-    <Pressable style={appStyles.primaryButton} onPress={() => setFoldersVisible(value => !value)}><Text style={appStyles.primaryButtonText}>Sync entire directory</Text></Pressable>
-    {foldersVisible ? <View>
-      {!folders.length ? <Text style={styles.note}>Use Scan Directory on Home first, then select that folder here.</Text> : folders.map(folder => <Pressable key={folder.id} style={styles.card} disabled={adding || !sync.ready || !server.connected} onPress={() => confirmFolder(folder.id, folder.title)}>
-        <Text style={styles.title}>{folder.title}</Text><Text style={styles.note}>{folder.videos} videos · {adding ? 'Adding…' : 'Tap to sync directory'}</Text>
-      </Pressable>)}
-    </View> : null}
+    {queued ? <Pressable style={appStyles.secondaryButton} onPress={() => void sync.pauseQueued()}><Text style={appStyles.secondaryButtonText}>Pause {queued} queued</Text></Pressable> : null}
+    {paused ? <Pressable style={appStyles.primaryButton} onPress={() => void sync.resumePaused()}><Text style={appStyles.primaryButtonText}>Resume {paused} paused</Text></Pressable> : null}
+    <View>
+      {!folders.length ? <Text style={styles.note}>Use Scan Directory on Home first, then select that folder here.</Text> : folders.map(folder => <View key={folder.id} style={styles.card}>
+        <Text style={styles.title}>{folder.title}</Text><Text style={styles.note}>{folder.videos} videos</Text>
+        <Pressable style={styles.folderSync} accessibilityLabel={`Sync ${folder.title}`} disabled={adding || !sync.ready || !server.connected} onPress={() => confirmFolder(folder.id, folder.title)}><Ionicons name="cloud-upload-outline" size={22} color={colors.white} /></Pressable>
+      </View>)}
+    </View>
     <Text style={appStyles.sectionTitle}>Upload history</Text>
   </View>;
   return <FlatList style={appStyles.screen} contentContainerStyle={styles.list} data={[...sync.jobs].sort((a, b) => b.updatedAt - a.updatedAt)} keyExtractor={job => job.id}
     ListHeaderComponent={header} ListEmptyComponent={<Text style={styles.note}>{sync.ready ? 'New uploads will appear here with their progress.' : 'Loading sync history…'}</Text>}
     renderItem={({ item: job }) => {
       const percent = job.total ? Math.floor(job.sent / job.total * 100) : 0;
-      const label = job.status === 'synced' ? 'Synced · 100%' : job.status === 'uploading' ? (percent === 100 ? 'Finishing on server…' : `Uploading · ${percent}%`) : job.status === 'queued' ? 'Queued' : job.status === 'interrupted' ? 'Interrupted' : 'Failed';
+      const label = job.status === 'synced' ? 'Synced · 100%' : job.status === 'uploading' ? (percent === 100 ? 'Finishing on server…' : `Uploading · ${percent}%`) : job.status === 'queued' ? 'Queued' : job.status === 'paused' ? 'Paused' : job.status === 'interrupted' ? 'Interrupted' : 'Failed';
       return <View style={styles.card}>
         <Text style={styles.title} numberOfLines={2}>{job.video.title}</Text><Text style={styles.note}>{job.video.channelTitle ?? job.video.creator}</Text>
         <Text style={[styles.badge, job.status === 'synced' && { color: '#60d394' }]}>{label}</Text>
@@ -71,5 +75,5 @@ const styles = StyleSheet.create({
   card: { padding: 16, borderRadius: 14, backgroundColor: colors.surface, marginBottom: 12, gap: 8 },
   title: { color: colors.text, fontWeight: '700', fontSize: 15 }, note: { color: colors.textMuted, fontSize: 13, lineHeight: 20 },
   badge: { color: colors.text, fontWeight: '600' }, track: { backgroundColor: '#333', height: 5, borderRadius: 3, overflow: 'hidden' },
-  fill: { backgroundColor: '#e50914', height: 5 },
+  fill: { backgroundColor: '#e50914', height: 5 }, folderSync: { position: 'absolute', right: 14, top: 18, padding: 8 },
 });

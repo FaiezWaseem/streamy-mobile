@@ -7,7 +7,7 @@ import { type VideoItem } from '../utils/types';
 
 export type SyncJob = {
   id: string; accountKey: string; video: VideoItem;
-  status: 'queued' | 'uploading' | 'synced' | 'failed' | 'interrupted';
+  status: 'queued' | 'paused' | 'uploading' | 'synced' | 'failed' | 'interrupted';
   sent: number; total: number; serverId?: string; error?: string; updatedAt: number;
 };
 type Progress = (sent: number, total: number) => void;
@@ -15,6 +15,8 @@ type Value = {
   jobs: SyncJob[]; ready: boolean; storageError: string | null;
   queueVideos: (videos: VideoItem[]) => Promise<number>;
   retry: (id: string) => Promise<void>;
+  pauseQueued: () => Promise<number>;
+  resumePaused: () => Promise<number>;
   upload: (video: VideoItem, progress?: Progress) => Promise<string>;
 };
 const Context = createContext<Value | null>(null);
@@ -25,7 +27,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const rows = useRef<SyncJob[]>([]);
-  const running = useRef(false);
+  const activeUploads = useRef(new Set<string>());
   const writes = useRef<Promise<unknown>>(Promise.resolve());
   const enqueues = useRef<Promise<unknown>>(Promise.resolve());
   const waits = useRef(new Map<string, { promise: Promise<string>; resolve: (id: string) => void; reject: (error: Error) => void; progress: Progress[] }>());
@@ -55,38 +57,41 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [db, save]);
 
-  // The provider stays mounted while the user moves between screens.
+  // Two workers share a single queue; active IDs are reserved before React rerenders.
   useEffect(() => {
-    if (!ready || running.current || !server.accountKey || !server.connected) return;
-    const job = [...rows.current].reverse().find(row => row.status === 'queued' && row.accountKey === server.accountKey);
-    if (!job) return;
-    running.current = true;
-    let current: SyncJob = { ...job, status: 'uploading' as SyncJob['status'], error: undefined, sent: 0 };
-    publish(current);
-    (async () => {
-      await save(current);
-      const serverId = await server.upload(current.video, (sent, total) => {
-        current = { ...current, sent, total, updatedAt: Date.now() };
+    if (!ready || !server.accountKey || !server.connected) return;
+    while (activeUploads.current.size < 2) {
+      const job = [...rows.current].reverse().find(row => row.status === 'queued' && row.accountKey === server.accountKey && !activeUploads.current.has(row.id));
+      if (!job) break;
+      activeUploads.current.add(job.id);
+      void (async () => {
+        let current: SyncJob = { ...job, status: 'uploading', error: undefined, sent: 0 };
         publish(current);
-        void save(current).catch(() => setStorageError('Sync history could not be saved.'));
-        waits.current.get(job.id)?.progress.forEach(callback => callback(sent, total));
-      }, job.id);
-      current = { ...current, status: 'synced', sent: current.total, serverId, error: undefined, updatedAt: Date.now() };
-      // A storage or library refresh error must never turn a verified upload into a failed transfer.
-      await save(current).catch(() => setStorageError('Uploaded successfully, but sync history could not be saved.'));
-      publish(current);
-      waits.current.get(job.id)?.resolve(serverId);
-    })().catch(async cause => {
-      const error = cause instanceof Error ? cause : new Error('Upload failed. Your local file was kept.');
-      current = { ...current, status: 'failed', error: error.message, updatedAt: Date.now() };
-      await save(current).catch(() => setStorageError('Sync history could not be saved.'));
-      publish(current);
-      waits.current.get(job.id)?.reject(error);
-    }).finally(() => {
-      waits.current.delete(job.id);
-      running.current = false;
-      setJobs([...rows.current]);
-    });
+        try {
+          await save(current);
+          const serverId = await server.upload(current.video, (sent, total) => {
+            current = { ...current, sent, total, updatedAt: Date.now() };
+            publish(current);
+            void save(current).catch(() => setStorageError('Sync history could not be saved.'));
+            waits.current.get(job.id)?.progress.forEach(callback => callback(sent, total));
+          }, job.id);
+          current = { ...current, status: 'synced', sent: current.total, serverId, error: undefined, updatedAt: Date.now() };
+          await save(current).catch(() => setStorageError('Uploaded successfully, but sync history could not be saved.'));
+          publish(current);
+          waits.current.get(job.id)?.resolve(serverId);
+        } catch (cause) {
+          const error = cause instanceof Error ? cause : new Error('Upload failed. Your local file was kept.');
+          current = { ...current, status: 'failed', error: error.message, updatedAt: Date.now() };
+          await save(current).catch(() => setStorageError('Sync history could not be saved.'));
+          publish(current);
+          waits.current.get(job.id)?.reject(error);
+        } finally {
+          waits.current.delete(job.id);
+          activeUploads.current.delete(job.id);
+          setJobs([...rows.current]);
+        }
+      })();
+    }
   }, [jobs, ready, server.accountKey, server.connected, server.upload, publish, save]);
 
   const enqueue = useCallback((videos: VideoItem[]) => {
@@ -120,6 +125,17 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     const job = rows.current.find(row => row.id === id);
     if (job && job.accountKey === server.accountKey) await enqueue([job.video]);
   }, [enqueue, server.accountKey]);
+  const changeQueuedStatus = useCallback(async (from: 'queued' | 'paused', to: 'queued' | 'paused') => {
+    const targets = rows.current.filter(job => job.accountKey === server.accountKey && job.status === from && !activeUploads.current.has(job.id));
+    const ids = new Set(targets.map(job => job.id));
+    const changedJobs = targets.map(job => ({ ...job, status: to, updatedAt: Date.now(), error: undefined }));
+    rows.current = rows.current.map(job => ids.has(job.id) ? changedJobs.find(changed => changed.id === job.id)! : job);
+    await Promise.all(changedJobs.map(save));
+    setJobs([...rows.current]);
+    return targets.length;
+  }, [server.accountKey, save, publish]);
+  const pauseQueued = useCallback(async () => { await enqueues.current; return changeQueuedStatus('queued', 'paused'); }, [changeQueuedStatus]);
+  const resumePaused = useCallback(() => changeQueuedStatus('paused', 'queued'), [changeQueuedStatus]);
   const upload = useCallback(async (video: VideoItem, progress?: Progress) => {
     const [queued] = await enqueue([video]);
     if (!queued) throw new Error('Only device videos can be synced.');
@@ -137,8 +153,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (progress) { waiter.progress.push(progress); progress(job.sent, job.total || 1); }
     return waiter.promise;
   }, [enqueue]);
-  const value = useMemo(() => ({ jobs: jobs.filter(job => job.accountKey === server.accountKey), ready, storageError, queueVideos, retry, upload }),
-    [jobs, server.accountKey, ready, storageError, queueVideos, retry, upload]);
+  const value = useMemo(() => ({ jobs: jobs.filter(job => job.accountKey === server.accountKey), ready, storageError, queueVideos, retry, pauseQueued, resumePaused, upload }),
+    [jobs, server.accountKey, ready, storageError, queueVideos, retry, pauseQueued, resumePaused, upload]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useSync() {

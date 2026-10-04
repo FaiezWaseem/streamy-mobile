@@ -16,6 +16,8 @@ export function VideoCard({ video, layout, onPress }: Props) {
   const isGrid = layout === 'grid';
   const isHome = layout === 'home';
   const frames = video.previewFrames;
+  const actorNames = (video.actors ?? []).slice(0, 2).map(actor => actor.name).join(' · ');
+  const remainingActors = Math.max(0, (video.actors?.length ?? 0) - 2);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [frameIndex, setFrameIndex] = useState(0);
   const previewIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -106,7 +108,7 @@ export function VideoCard({ video, layout, onPress }: Props) {
           </View>
         )}
         <View style={[appStyles.videoSourceBadge, video.source === 'server' ? appStyles.videoSourceBadgeCloud : appStyles.videoSourceBadgeLocal]}>
-          <Text style={appStyles.videoSourceBadgeText}>{video.source === 'server' ? 'Cloud' : /^https?:/i.test(video.video) ? 'Link' : 'Local'}</Text>
+          <Text style={appStyles.videoSourceBadgeText}>{video.isDownloaded ? 'Offline' : video.source === 'server' ? 'Cloud' : /^https?:/i.test(video.video) ? 'Link' : 'Local'}</Text>
         </View>
         <View style={appStyles.videoCardDuration}>
           <Text style={appStyles.videoCardDurationText}>{video.duration}</Text>
@@ -143,6 +145,7 @@ export function VideoCard({ video, layout, onPress }: Props) {
                 <Text style={appStyles.videoCardMeta}>
                   {video.views} · {video.published}
                 </Text>
+                {actorNames ? <Text style={[appStyles.videoCardMeta,{fontSize:12,marginTop:2}]} numberOfLines={1}>Cast: {actorNames}{remainingActors ? ` +${remainingActors}` : ''}</Text> : null}
               </View>
             </View>
           </>
@@ -155,6 +158,7 @@ export function VideoCard({ video, layout, onPress }: Props) {
             >
               {video.title}
             </Text>
+            {actorNames ? <Text style={[appStyles.videoCardMeta,{fontSize:12,marginTop:3}]} numberOfLines={1}>Cast: {actorNames}{remainingActors ? ` +${remainingActors}` : ''}</Text> : null}
           </>
         ) : (
           <>
@@ -166,6 +170,7 @@ export function VideoCard({ video, layout, onPress }: Props) {
               {video.title}
             </Text>
             <Text style={appStyles.videoCardMeta}>{video.creator}</Text>
+            {actorNames ? <Text style={[appStyles.videoCardMeta,{fontSize:12}]} numberOfLines={1}>Cast: {actorNames}{remainingActors ? ` +${remainingActors}` : ''}</Text> : null}
             <Text style={appStyles.videoCardMeta}>{video.views}</Text>
           </>
         )}

@@ -1,8 +1,8 @@
 import Slider from '@react-native-community/slider';
-import { useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useEvent } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { ActionBubble } from '../components/ActionBubble';
+import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
 import { appStyles } from '../utils/theme';
 import { type VideoItem } from '../utils/types';
@@ -24,7 +25,10 @@ type Props = {
 };
 
 export function ReelsScreen({ onOpenSaved }: Props) {
-  const { videos } = useLocalLibrary();
+  const { videos: localVideos } = useLocalLibrary();
+  const server = useServerLibrary();
+  const videos = useMemo(() => [...localVideos, ...server.videos], [localVideos, server.videos]);
+  useFocusEffect(useCallback(() => { if (server.connected) void server.refresh().catch(() => undefined); }, [server.connected, server.refresh]));
   const isFocused = useIsFocused();
   const [activeReelId, setActiveReelId] = useState<string | undefined>(videos[0]?.id);
   const [reelViewportHeight, setReelViewportHeight] = useState(0);
@@ -60,7 +64,7 @@ export function ReelsScreen({ onOpenSaved }: Props) {
       {videos.length ? (
         <FlatList
           data={videos}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => `${item.id}:${item.video}`}
           style={appStyles.reelsList}
           snapToInterval={reelViewportHeight || undefined}
           disableIntervalMomentum
@@ -91,7 +95,7 @@ export function ReelsScreen({ onOpenSaved }: Props) {
           <View style={appStyles.emptyState}>
             <Text style={appStyles.emptyStateTitle}>No videos for reels yet</Text>
             <Text style={appStyles.emptyStateText}>
-              Scan a directory or import local videos to populate the reels feed.
+              Scan a directory or connect your server to add videos to the reels feed.
             </Text>
           </View>
         </View>
@@ -122,9 +126,17 @@ function formatPlaybackTime(seconds: number) {
 }
 
 function ReelItem({ item, isActive, onOpenSaved, reelHeight }: ReelItemProps) {
-  const player = useVideoPlayer(item.video, (videoPlayer) => {
+  const source = useMemo(() => item.authToken ? { uri: item.video, headers: { Authorization: `Bearer ${item.authToken}` } } : item.video, [item.video, item.authToken]);
+  // Keep off-screen reels from opening network streams while the active reel plays.
+  const playerSource = useMemo(() => isActive ? source : null, [isActive, source]);
+  const player = useVideoPlayer(playerSource, (videoPlayer) => {
     videoPlayer.loop = true;
     videoPlayer.playbackRate = 1;
+    videoPlayer.bufferOptions = {
+      preferredForwardBufferDuration: 6,
+      minBufferForPlayback: 0.5,
+      prioritizeTimeOverSizeThreshold: true,
+    };
     videoPlayer.timeUpdateEventInterval = 0.25;
   });
   const timeUpdate = useEvent(player, 'timeUpdate', null);

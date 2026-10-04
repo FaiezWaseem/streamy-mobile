@@ -117,7 +117,7 @@ export function ChannelsScreen({ onOpenChannel, onOpenSync }: Props) {
               </View>
               <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
             </Pressable>
-            {channel.source === 'local' && channel.id.startsWith('directory-') ? <Pressable style={appStyles.secondaryButton} onPress={() => onOpenSync(channel.id)}><Text style={appStyles.secondaryButtonText}>Sync directory</Text></Pressable> : null}
+            {channel.source === 'local' && channel.id.startsWith('directory-') ? <Pressable style={appStyles.iconButton} accessibilityLabel={`Sync ${channel.title}`} onPress={() => onOpenSync(channel.id)}><Ionicons name="cloud-upload-outline" size={22} color={colors.white} /></Pressable> : null}
             {channel.source === 'local' ? <Pressable
               style={appStyles.channelDeleteButton}
               onPress={() => handleDeleteChannel(channel.id, channel.title)}

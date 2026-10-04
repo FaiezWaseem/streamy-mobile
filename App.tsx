@@ -12,6 +12,9 @@ import { View } from 'react-native';
 import { LocalLibraryProvider } from './src/contexts/LocalLibraryContext';
 import { SyncProvider } from './src/contexts/SyncContext';
 import { SyncScreen } from './src/screens/SyncScreen';
+import { DirectoryScanScreen } from './src/screens/DirectoryScanScreen';
+import { TagLibraryScreen } from './src/screens/TagLibraryScreen';
+import { ActorLibraryScreen } from './src/screens/ActorLibraryScreen';
 import { ServerLibraryProvider } from './src/contexts/ServerLibraryContext';
 import { ChannelVideosScreen } from './src/screens/ChannelVideosScreen';
 import { ChannelsScreen } from './src/screens/ChannelsScreen';
@@ -64,6 +67,9 @@ function AuthenticatedStack({ onLogout }: { onLogout: () => void }) {
             onOpenSearch={() => navigation.navigate('Search')}
             onOpenSaved={() => navigation.navigate('Saved')}
             onOpenSync={(channelId) => navigation.navigate('Sync', { channelId })}
+            onOpenDirectoryScan={() => navigation.navigate('DirectoryScan')}
+            onOpenTags={() => navigation.navigate('TagLibrary')}
+            onOpenActors={() => navigation.navigate('ActorLibrary')}
             onOpenVideo={(videoId) => navigation.navigate('Video', { videoId })}
             onOpenChannel={(channelId, title) =>
               navigation.navigate('ChannelVideos', { channelId, title })
@@ -71,12 +77,15 @@ function AuthenticatedStack({ onLogout }: { onLogout: () => void }) {
           />
         )}
       </AuthenticatedNav.Screen>
+      <AuthenticatedNav.Screen name="DirectoryScan" options={{ headerShown: true, title: 'Scan Directory' }} component={DirectoryScanScreen} />
+      <AuthenticatedNav.Screen name="TagLibrary" options={{ headerShown: true, title: 'Tags' }} component={TagLibraryScreen} />
+      <AuthenticatedNav.Screen name="ActorLibrary" options={{ headerShown: true, title: 'Actors' }} component={ActorLibraryScreen} />
       <AuthenticatedNav.Screen name="Sync" options={{ headerShown: true, title: 'Sync' }}>
         {({ route, navigation }) => <SyncScreen channelId={route.params?.channelId} onOpenVideo={videoId => navigation.navigate('Video', { videoId })} />}
       </AuthenticatedNav.Screen>
       <AuthenticatedNav.Screen name="Search" options={{ headerShown: true, title: 'Search' }}>
-        {({ navigation }) => (
-          <SearchScreen onOpenVideo={(videoId) => navigation.navigate('Video', { videoId })} />
+        {({ route, navigation }) => (
+          <SearchScreen initialTag={route.params?.tag} onOpenVideo={(videoId) => navigation.navigate('Video', { videoId })} />
         )}
       </AuthenticatedNav.Screen>
       <AuthenticatedNav.Screen name="Saved" options={{ headerShown: true, title: 'Saved' }}>
@@ -92,6 +101,7 @@ function AuthenticatedStack({ onLogout }: { onLogout: () => void }) {
             onOpenChannel={(channelId, title) =>
               navigation.navigate('ChannelVideos', { channelId, title })
             }
+            onOpenTag={(tag) => navigation.push('Search', { tag })}
           />
         )}
       </AuthenticatedNav.Screen>
@@ -115,6 +125,9 @@ function MainTabs({
   onOpenSearch,
   onOpenSaved,
   onOpenSync,
+  onOpenDirectoryScan,
+  onOpenTags,
+  onOpenActors,
   onOpenVideo,
   onOpenChannel,
 }: MainTabsProps) {
@@ -163,7 +176,7 @@ function MainTabs({
       })}
     >
       <Tab.Screen name="Home" options={{ headerShown: false }}>
-        {() => <HomeScreen onOpenSync={onOpenSync} onOpenSearch={onOpenSearch} onOpenVideo={onOpenVideo} />}
+        {() => <HomeScreen onOpenSync={onOpenSync} onOpenDirectoryScan={onOpenDirectoryScan} onOpenSearch={onOpenSearch} onOpenVideo={onOpenVideo} />}
       </Tab.Screen>
       <Tab.Screen name="Channels" options={{ headerShown: false }}>
         {() => <ChannelsScreen onOpenSync={onOpenSync} onOpenChannel={onOpenChannel} />}
@@ -180,6 +193,8 @@ function MainTabs({
         {() => (
           <ProfileScreen
             onOpenSync={onOpenSync}
+            onOpenTags={onOpenTags}
+            onOpenActors={onOpenActors}
             onOpenSaved={onOpenSaved}
             onOpenVideo={onOpenVideo}
             onLogout={onLogout}

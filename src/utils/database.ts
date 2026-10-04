@@ -179,10 +179,13 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS video_tags(video_id TEXT PRIMARY KEY, tags TEXT NOT NULL DEFAULT '[]');
+    CREATE TABLE IF NOT EXISTS video_actor_profiles(video_id TEXT PRIMARY KEY, actors TEXT NOT NULL DEFAULT '[]');
     CREATE TABLE IF NOT EXISTS interest_watches(event_id TEXT PRIMARY KEY, video_id TEXT NOT NULL,
       watched_at TEXT NOT NULL, tags TEXT NOT NULL, watched_seconds REAL NOT NULL, duration REAL NOT NULL DEFAULT 0,
       account_key TEXT NOT NULL DEFAULT 'local', synced INTEGER NOT NULL DEFAULT 0);
-    PRAGMA user_version = 7;
+    CREATE TABLE IF NOT EXISTS available_tags(tag TEXT PRIMARY KEY COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS offline_downloads(video_id TEXT PRIMARY KEY, local_uri TEXT NOT NULL, video_json TEXT NOT NULL, downloaded_at TEXT NOT NULL);
+    PRAGMA user_version = 8;
   `);
 }
 
@@ -555,6 +558,13 @@ export async function getLocalVideoTags(db: SQLiteDatabase) {
   const rows = await db.getAllAsync<{ video_id: string; tags: string }>('SELECT * FROM video_tags');
   return Object.fromEntries(rows.map(row => [row.video_id, JSON.parse(row.tags) as string[]]));
 }
+export async function setLocalVideoActors(db: SQLiteDatabase, videoId: string, actors: import('./types').ActorItem[]) {
+  await db.runAsync('INSERT INTO video_actor_profiles(video_id,actors) VALUES(?,?) ON CONFLICT(video_id) DO UPDATE SET actors=excluded.actors', [videoId, JSON.stringify(actors)]);
+}
+export async function getLocalVideoActors(db: SQLiteDatabase) {
+  const rows=await db.getAllAsync<{video_id:string;actors:string}>('SELECT * FROM video_actor_profiles');
+  return Object.fromEntries(rows.map(row=>[row.video_id,JSON.parse(row.actors) as import('./types').ActorItem[]]));
+}
 export async function recordInterestEvent(db: SQLiteDatabase, event: InterestWatch, seconds: number, accountKey = 'local') {
   await db.runAsync('INSERT OR IGNORE INTO interest_watches(event_id,video_id,watched_at,tags,watched_seconds,account_key,duration) VALUES(?,?,?,?,?,?,?)',
     [event.event_id, event.video_id, event.watched_at, JSON.stringify(event.tags), seconds, accountKey, event.duration ?? 0]);
@@ -565,9 +575,32 @@ export async function getInterestHistory(db: SQLiteDatabase, accountKey: string 
   return rows.map(row => ({ ...row, tags: JSON.parse(row.tags) as string[] }));
 }
 export async function pendingInterestEvents(db: SQLiteDatabase, accountKey: string) {
-  const rows = await db.getAllAsync<Omit<InterestWatch, 'tags'> & { tags: string }>('SELECT * FROM interest_watches WHERE account_key=? AND synced=0 ORDER BY watched_at LIMIT 20', [accountKey]);
+  const rows = await db.getAllAsync<Omit<InterestWatch, 'tags'> & { tags: string }>("SELECT * FROM interest_watches WHERE (account_key=? OR account_key='local') AND synced=0 ORDER BY watched_at LIMIT 20", [accountKey]);
   return rows.map(row => ({ ...row, tags: JSON.parse(row.tags) as string[] }));
 }
 export async function markInterestSynced(db: SQLiteDatabase, eventId: string) {
   await db.runAsync('UPDATE interest_watches SET synced=1 WHERE event_id=?', [eventId]);
+}
+
+export async function getAvailableTags(db: SQLiteDatabase) {
+  const rows = await db.getAllAsync<{tag: string}>('SELECT tag FROM available_tags ORDER BY tag COLLATE NOCASE');
+  return rows.map(row => row.tag);
+}
+export async function addAvailableTags(db: SQLiteDatabase, tags: string[]) {
+  for (const tag of tags) await db.runAsync('INSERT OR IGNORE INTO available_tags(tag) VALUES(?)', [tag]);
+}
+export async function removeAvailableTag(db: SQLiteDatabase, tag: string) {
+  await db.runAsync('DELETE FROM available_tags WHERE tag=?', [tag]);
+}
+export type OfflineDownloadRow = { video_id: string; local_uri: string; video_json: string };
+export async function getOfflineDownloads(db: SQLiteDatabase) {
+  return db.getAllAsync<OfflineDownloadRow>('SELECT video_id,local_uri,video_json FROM offline_downloads');
+}
+export async function saveOfflineDownload(db: SQLiteDatabase, video: VideoItem, uri: string) {
+  const { authToken, ...metadata } = video;
+  await db.runAsync('INSERT INTO offline_downloads(video_id,local_uri,video_json,downloaded_at) VALUES(?,?,?,?) ON CONFLICT(video_id) DO UPDATE SET local_uri=excluded.local_uri,video_json=excluded.video_json,downloaded_at=excluded.downloaded_at',
+    [video.id, uri, JSON.stringify(metadata), new Date().toISOString()]);
+}
+export async function deleteOfflineDownload(db: SQLiteDatabase, videoId: string) {
+  await db.runAsync('DELETE FROM offline_downloads WHERE video_id=?', [videoId]);
 }

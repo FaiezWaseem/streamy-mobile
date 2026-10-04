@@ -13,12 +13,14 @@ import { appStyles, colors } from '../utils/theme';
 
 type Props = {
   onOpenSync: () => void;
+  onOpenTags: () => void;
+  onOpenActors: () => void;
   onOpenSaved: () => void;
   onOpenVideo: (videoId: string) => void;
   onLogout: () => void;
 };
 
-export function ProfileScreen({ onOpenSync, onOpenSaved, onOpenVideo, onLogout }: Props) {
+export function ProfileScreen({ onOpenSync, onOpenTags, onOpenActors, onOpenSaved, onOpenVideo, onLogout }: Props) {
   const db = useSQLiteContext();
   const { videos, getVideoById } = useLocalLibrary();
   const server = useServerLibrary();
@@ -63,7 +65,9 @@ export function ProfileScreen({ onOpenSync, onOpenSaved, onOpenVideo, onLogout }
           <Text style={appStyles.profileHandle}>@streamy</Text>
         </View>
 
-        <Pressable style={appStyles.primaryButton} onPress={onOpenSync}><Text style={appStyles.primaryButtonText}>Sync videos & directories</Text></Pressable>
+        <Pressable style={appStyles.primaryButton} onPress={onOpenSync}><Text style={appStyles.primaryButtonText}>Sync videos</Text></Pressable>
+        <Pressable style={appStyles.secondaryButton} onPress={onOpenTags}><Text style={appStyles.secondaryButtonText}>Manage tags</Text></Pressable>
+        <Pressable style={appStyles.secondaryButton} onPress={onOpenActors}><Text style={appStyles.secondaryButtonText}>Manage actors</Text></Pressable>
         <View style={appStyles.statsRow}>
           <StatCard value={String(videos.length)} label="Videos" />
           <StatCard value={String(viewsCount)} label="Views" />

@@ -3,7 +3,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Text, View } from 'react-native';
 
 import { VideoCard } from '../components/VideoCard';
 import { useLocalLibrary } from '../contexts/LocalLibraryContext';
@@ -11,7 +11,7 @@ import { useSync } from '../contexts/SyncContext';
 import { useServerLibrary } from '../contexts/ServerLibraryContext';
 import {
   getInterestHistory,
-  recordInterestEvent,
+  getAvailableTags,
   isVideoLiked,
   isVideoSaved,
   likeVideo,
@@ -29,13 +29,14 @@ type Props = {
   videoId: string;
   onOpenVideo: (videoId: string) => void;
   onOpenChannel: (channelId: string, title: string) => void;
+  onOpenTag: (tag: string) => void;
 };
 
 function fallbackChannelId(value: string) {
   return `channel-${value.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
-export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
+export function VideoScreen({ videoId, onOpenVideo, onOpenChannel, onOpenTag }: Props) {
   const { getVideoById } = useLocalLibrary();
   const { getVideoById: getServerVideoById } = useServerLibrary();
   const video = getVideoById(videoId) ?? getServerVideoById(videoId);
@@ -49,22 +50,27 @@ export function VideoScreen({ videoId, onOpenVideo, onOpenChannel }: Props) {
       </SafeAreaView>
     );
   }
-  return <VideoContent key={video.id} videoId={videoId} video={video} onOpenVideo={onOpenVideo} onOpenChannel={onOpenChannel} />;
+  return <VideoContent key={`${video.id}:${video.video}`} videoId={videoId} video={video} onOpenVideo={onOpenVideo} onOpenChannel={onOpenChannel} onOpenTag={onOpenTag} />;
 }
 
-function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: VideoItem }) {
+function VideoContent({ video, onOpenVideo, onOpenChannel, onOpenTag }: Props & { video: VideoItem }) {
   const db = useSQLiteContext();
-  const { videos, deleteVideo, removeLocalFileAfterSync, updateTags: updateLocalTags } = useLocalLibrary();
+  const { videos, deleteVideo, removeLocalFileAfterSync, updateTags: updateLocalTags, updateActors: updateLocalActors } = useLocalLibrary();
   const server = useServerLibrary();
-  const { connected } = server;
+  const { connected, downloadsInProgress, downloadVideo, removeOfflineVideo } = server;
+  const isDownloading = downloadsInProgress.includes(video.id);
   const { upload } = useSync();
   const [tagError, setTagError] = useState<string | null>(null);
   const [editingTags, setEditingTags] = useState(false);
+  const [editingActors, setEditingActors] = useState(false);
+  const [actorDraft, setActorDraft] = useState<number[]>((video.actors ?? []).map(actor => actor.id));
+  const [savingActors, setSavingActors] = useState(false);
   const isFocused = useIsFocused();
   const focusedRef = useRef(isFocused);
   focusedRef.current = isFocused;
   const mountedRef = useRef(true);
-  const [tagDraft, setTagDraft] = useState((video.tags ?? []).join(', '));
+  const [tagDraft, setTagDraft] = useState<string[]>(video.tags ?? []);
+  const [sharedTags, setSharedTags] = useState<string[]>([]);
   const [savingTags, setSavingTags] = useState(false);
   const [interestHistory, setInterestHistory] = useState<InterestWatch[]>([]);
   const videoRef = useRef(video);
@@ -75,6 +81,7 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | null>(null);
 
+  const selectableTags = useMemo(() => Array.from(new Set([...sharedTags, ...server.availableTags, ...videos.flatMap(item => item.tags ?? []), ...server.videos.flatMap(item => item.tags ?? []), ...(video.tags ?? [])])).sort((a, b) => a.localeCompare(b)), [sharedTags, server.availableTags, videos, server.videos, video.tags]);
   const relatedVideos = useMemo(
     () => rankVideos([...videos, ...server.videos], [...server.history, ...interestHistory], video).slice(0, 12),
     [video, videos, server.videos, server.history, interestHistory]
@@ -85,6 +92,11 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
   );
   const player = useVideoPlayer(playerSource, (videoPlayer) => {
     videoPlayer.loop = false;
+    videoPlayer.bufferOptions = {
+      preferredForwardBufferDuration: 6,
+      minBufferForPlayback: 0.5,
+      prioritizeTimeOverSizeThreshold: true,
+    };
     videoPlayer.pause();
   });
 
@@ -107,7 +119,8 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
     void syncHistory().catch(() => undefined);
   }, [db, video.id, server.accountKey]);
 
-  useEffect(() => { setTagDraft((video.tags ?? []).join(', ')); }, [video.tags]);
+  useEffect(() => { setTagDraft(video.tags ?? []); }, [video.tags]);
+  useEffect(() => { void getAvailableTags(db).then(setSharedTags).catch(() => undefined); }, [db]);
   useEffect(() => {
     player.timeUpdateEventInterval = 1;
     let lastTime = player.currentTime, seconds = 0, recorded = false;
@@ -125,7 +138,7 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
       recorded = true;
       const current = videoRef.current;
       const event: InterestWatch = { event_id: eventId, video_id: current.id, watched_at: new Date().toISOString(), tags: current.tags ?? [], duration };
-      const save = current.source === 'server' ? server.recordWatch(event, seconds) : recordInterestEvent(db, event, seconds);
+      const save = server.recordWatch(event, seconds);
       void save.then(() => { if (mountedRef.current) setInterestHistory(history => [event, ...history]); }).catch(() => undefined);
     });
     return () => {
@@ -143,9 +156,20 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
       if (video.source === 'server') await server.updateTags(video.id, tags);
       else await updateLocalTags(video.id, tags);
       if (!mountedRef.current) return;
-      setTagDraft(tags.join(', ')); setEditingTags(false); setActionMessage('Tags saved.');
+      setTagDraft(tags); setEditingTags(false); setActionMessage('Tags saved.');
     } catch (error) { if (mountedRef.current) setTagError(error instanceof Error ? error.message : 'Could not save tags.'); }
     finally { if (mountedRef.current) setSavingTags(false); }
+  }
+
+  async function handleSaveActors() {
+    setSavingActors(true); setTagError(null);
+    try {
+      const selected=server.actors.filter(actor=>actorDraft.includes(actor.id));
+      if(video.source==='server') await server.updateVideoActors(video.id,actorDraft); else await updateLocalActors(video.id,selected);
+      if (mountedRef.current) { setEditingActors(false); setActionMessage('Actors saved.'); }
+    }
+    catch(error) { if(mountedRef.current) setTagError(error instanceof Error?error.message:'Could not save actors.'); }
+    finally { if(mountedRef.current) setSavingActors(false); }
   }
 
   useFocusEffect(
@@ -264,6 +288,17 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
     );
   }
 
+  async function handleDownload() {
+    setActionMessage(null);
+    try { await downloadVideo(video.id); setActionMessage('Saved for offline playback.'); }
+    catch (cause) { setActionMessage(cause instanceof Error ? cause.message : 'Download failed.'); }
+  }
+  async function handleRemoveOffline() {
+    Alert.alert('Remove download', 'Delete the saved offline copy from this device?', [
+      { text: 'Cancel', style: 'cancel' }, { text: 'Delete download', style: 'destructive', onPress: () => void removeOfflineVideo(video.id) },
+    ]);
+  }
+
   async function syncToServer(deleteLocal: boolean) {
     if (isSyncing) return;
     setIsSyncing(true);
@@ -307,8 +342,14 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.75)' }}>
           <View style={{ width: '100%', maxWidth: 480, backgroundColor: colors.surface, borderRadius: 18, padding: 20, gap: 16 }}>
             <Text style={appStyles.videoDescriptionHeading}>Edit tags</Text>
-            <TextInput value={tagDraft} onChangeText={setTagDraft} autoFocus editable={!savingTags} placeholder="funny, thriller, english" placeholderTextColor={colors.textMuted} style={appStyles.searchInput} />
-            <Text style={appStyles.videoDescriptionText}>Separate tags with commas. Up to 20 tags.</Text>
+            <Text style={appStyles.videoDescriptionText}>Select from your tag library. Add tags in Profile → Manage tags.</Text>
+            <ScrollView style={{ maxHeight: 300 }}><View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {selectableTags.map(tag => {
+                const selected = tagDraft.includes(tag);
+                return <Pressable key={tag} disabled={savingTags} onPress={() => setTagDraft(current => selected ? current.filter(value => value !== tag) : current.length < 20 ? [...current, tag] : current)} style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, backgroundColor: selected ? colors.accent : colors.surfaceSoft }}><Text style={{ color: colors.white }}>{selected ? '✓ ' : ''}{tag}</Text></Pressable>;
+              })}
+              {!selectableTags.length ? <Text style={appStyles.videoDescriptionText}>No tags yet. Add some from Profile → Manage tags.</Text> : null}
+            </View></ScrollView>
             {tagError ? <Text style={{ color: colors.accent }}>{tagError}</Text> : null}
             <Pressable style={appStyles.primaryButton} disabled={savingTags} onPress={() => void handleSaveTags()}>
               <Text style={appStyles.primaryButtonText}>{savingTags ? 'Saving…' : 'Save tags'}</Text>
@@ -319,25 +360,40 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
           </View>
         </KeyboardAvoidingView>
       </Modal>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <VideoView
-          player={player}
-          style={appStyles.videoHero}
-          contentFit="cover"
-          nativeControls
-          allowsFullscreen
-        />
-
+      <Modal visible={editingActors} transparent animationType="fade" onRequestClose={() => setEditingActors(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.75)' }}>
+          <View style={{ width: '100%', maxWidth: 480, backgroundColor: colors.surface, borderRadius: 18, padding: 20, gap: 16 }}>
+            <Text style={appStyles.videoDescriptionHeading}>Edit actors</Text>
+            <ScrollView style={{maxHeight:320}}><View style={{gap:8}}>{server.actors.map(actor=>{const active=actorDraft.includes(actor.id);return <Pressable key={actor.id} disabled={savingActors} onPress={()=>setActorDraft(current=>active?current.filter(id=>id!==actor.id):[...current,actor.id])} style={{flexDirection:'row',alignItems:'center',gap:10,backgroundColor:active?colors.surfaceSoft:colors.background,padding:10,borderRadius:12}}>{actor.profile_image?<Image source={{uri:actor.profile_image}} style={{width:36,height:36,borderRadius:18}}/>:null}<Text style={{color:colors.text}}>{active?'✓  ':''}{actor.name}</Text></Pressable>;})}{!server.actors.length?<Text style={appStyles.videoDescriptionText}>Create actor profiles from Profile → Manage actors.</Text>:null}</View></ScrollView>
+            {tagError?<Text style={{color:colors.accent}}>{tagError}</Text>:null}
+            <Pressable style={appStyles.primaryButton} disabled={savingActors} onPress={()=>void handleSaveActors()}><Text style={appStyles.primaryButtonText}>{savingActors?'Saving…':'Save actors'}</Text></Pressable>
+            <Pressable style={appStyles.secondaryButton} disabled={savingActors} onPress={()=>setEditingActors(false)}><Text style={appStyles.secondaryButtonText}>Cancel</Text></Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+      <VideoView
+        player={player}
+        style={appStyles.videoHero}
+        contentFit="cover"
+        nativeControls
+        allowsFullscreen
+      />
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
         <View style={appStyles.videoPageBody}>
           <Text style={appStyles.videoPageTitle}>{video.title}</Text>
           <Text style={appStyles.videoPageMeta}>
             {video.views} · {video.published}
           </Text>
 
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-            {(video.tags ?? []).map(tag => <Text key={tag} style={{ color: colors.text, backgroundColor: colors.surface, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>{tag}</Text>)}
+          {(video.actors ?? []).length || video.canEdit ? <View style={{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:6,marginBottom:4}}>
+            {(video.actors??[]).map(actor=><View key={actor.id} style={{flexDirection:'row',alignItems:'center',gap:5,backgroundColor:colors.surface,paddingHorizontal:9,paddingVertical:4,borderRadius:18}}>{actor.profile_image?<Image source={{uri:actor.profile_image}} style={{width:20,height:20,borderRadius:10}}/>:null}<Text style={{color:colors.text}}>{actor.name}</Text></View>)}
+            {(video.canEdit||video.source!=='server')?<Pressable onPress={()=>{setTagError(null);setActorDraft((video.actors??[]).map(actor=>actor.id));setEditingActors(true);}} style={{flexDirection:'row',alignItems:'center',gap:5,padding:8}}><Ionicons name="pencil-outline" size={16} color={colors.textMuted}/><Text style={{color:colors.textMuted}}>Edit actors</Text></Pressable>:null}
+          </View>:null}
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            {(video.tags ?? []).map(tag => <Pressable key={tag} accessibilityRole="button" accessibilityLabel={`Search videos tagged ${tag}`} onPress={() => onOpenTag(tag)} style={{ backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16 }}><Text style={{ color: colors.text }}>{tag}</Text></Pressable>)}
             {video.canEdit || video.source !== 'server' ? (
-              <Pressable accessibilityRole="button" onPress={() => { setTagError(null); setTagDraft((video.tags ?? []).join(', ')); setEditingTags(true); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8 }}>
+              <Pressable accessibilityRole="button" onPress={() => { setTagError(null); setTagDraft(video.tags ?? []); setEditingTags(true); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8 }}>
                 <Ionicons name="pencil-outline" size={16} color={colors.textMuted} />
                 <Text style={{ color: colors.textMuted }}>Edit tags</Text>
               </Pressable>
@@ -396,6 +452,15 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
               />
               <Text style={appStyles.videoActionText}>{saved ? 'Saved' : 'Save'}</Text>
             </Pressable>
+            {video.source === 'server' ? <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isDownloading ? 'Downloading video' : video.isDownloaded ? 'Remove offline download' : 'Download for offline playback'}
+              disabled={isDownloading || (!video.isDownloaded && !connected)}
+              onPress={() => video.isDownloaded ? void handleRemoveOffline() : void handleDownload()}
+              style={[appStyles.videoActionButton,{width:42,height:42,padding:0,justifyContent:'center',opacity:isDownloading||(!video.isDownloaded&&!connected)?0.5:1}]}
+            >
+              {isDownloading ? <ActivityIndicator size="small" color={colors.white}/> : <Ionicons name={video.isDownloaded?'checkmark-circle-outline':'download-outline'} size={20} color={colors.white}/>}
+            </Pressable> : null}
             {video.source !== 'server' ? <Pressable style={appStyles.videoActionButton} onPress={handleDeleteVideo}>
               <Ionicons name="trash-outline" size={18} color={colors.white} />
               <Text style={appStyles.videoActionText}>Remove</Text>
@@ -432,11 +497,6 @@ function VideoContent({ video, onOpenVideo, onOpenChannel }: Props & { video: Vi
               <Text style={appStyles.videoSubscribeText}>Subscribe</Text>
             </Pressable>
           </Pressable>
-
-          <View style={appStyles.videoDescriptionCard}>
-            <Text style={appStyles.videoDescriptionHeading}>Description</Text>
-            <Text style={appStyles.videoDescriptionText}>{video.description}</Text>
-          </View>
 
           <Text style={appStyles.sectionTitle}>Similar videos</Text>
           <View style={appStyles.searchResultsList}>
